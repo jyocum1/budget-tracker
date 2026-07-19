@@ -323,6 +323,60 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
 <body>
 <div id="root"></div>
 
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
+import { getFirestore, doc, onSnapshot, setDoc, enableIndexedDbPersistence } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyANG-kYcZrW86BplwMubf4CkLqiiOWMODE",
+  authDomain: "budget-tracker-99497.firebaseapp.com",
+  projectId: "budget-tracker-99497",
+  storageBucket: "budget-tracker-99497.firebasestorage.app",
+  messagingSenderId: "770594927410",
+  appId: "1:770594927410:web:5ec5d02dd5ba9197c01d2b"
+};
+
+const fbApp = initializeApp(firebaseConfig);
+const db = getFirestore(fbApp);
+const dataDocRef = doc(db, "budgetTracker", "data");
+
+try {
+  await enableIndexedDbPersistence(db);
+} catch (e) {
+  console.warn("Firestore offline persistence not enabled:", e && e.code);
+}
+
+let saveTimer = null;
+window.firestoreSave = function (categories, transactions) {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    setDoc(dataDocRef, {
+      categories,
+      transactions,
+      updatedAt: Date.now()
+    }).catch(err => console.error("Firestore save failed:", err));
+  }, 400);
+};
+
+window.firestoreInit = function () {
+  if (window.__firestoreListening) return;
+  window.__firestoreListening = true;
+  onSnapshot(dataDocRef, snap => {
+    if (snap.exists()) {
+      window.dispatchEvent(new CustomEvent("firestore-data", { detail: snap.data() }));
+    } else {
+      window.dispatchEvent(new CustomEvent("firestore-empty"));
+    }
+  }, err => {
+    console.error("Firestore listen failed:", err);
+    window.dispatchEvent(new CustomEvent("firestore-error", { detail: err }));
+  });
+};
+
+window.firestoreReadyFlag = true;
+window.dispatchEvent(new CustomEvent("firestore-ready"));
+</script>
+
 <script>
 const {
   useState,
@@ -1087,12 +1141,56 @@ function BudgetTracker() {
   const [fCategory, setFCategory] = useState("groceries");
   const [fDate, setFDate] = useState(todayISO());
   const [fNote, setFNote] = useState("");
+  const firstSyncDoneRef = useRef(false);
+  const skipNextRemoteSaveRef = useRef(false);
+  const [syncStatus, setSyncStatus] = useState("connecting"); // connecting | synced | offline
   useEffect(() => {
     saveJSON(STORAGE_KEY_TXNS, transactions);
   }, [transactions]);
   useEffect(() => {
     saveJSON(STORAGE_KEY_CATS, categories);
   }, [categories]);
+  useEffect(() => {
+    if (!firstSyncDoneRef.current) return;
+    if (skipNextRemoteSaveRef.current) {
+      skipNextRemoteSaveRef.current = false;
+      return;
+    }
+    if (window.firestoreSave) {
+      window.firestoreSave(categories, transactions);
+      setSyncStatus("synced");
+    }
+  }, [categories, transactions]);
+  useEffect(() => {
+    function handleData(e) {
+      const detail = e.detail || {};
+      skipNextRemoteSaveRef.current = true;
+      if (detail.categories) setCategories(detail.categories);
+      if (detail.transactions) setTransactions(detail.transactions);
+      firstSyncDoneRef.current = true;
+      setSyncStatus("synced");
+    }
+    function handleEmpty() {
+      firstSyncDoneRef.current = true;
+      if (window.firestoreSave) window.firestoreSave(categories, transactions);
+      setSyncStatus("synced");
+    }
+    function handleError() {
+      setSyncStatus("offline");
+    }
+    window.addEventListener("firestore-data", handleData);
+    window.addEventListener("firestore-empty", handleEmpty);
+    window.addEventListener("firestore-error", handleError);
+    const start = () => window.firestoreInit && window.firestoreInit();
+    if (window.firestoreReadyFlag) start();
+    else window.addEventListener("firestore-ready", start, { once: true });
+    return () => {
+      window.removeEventListener("firestore-data", handleData);
+      window.removeEventListener("firestore-empty", handleEmpty);
+      window.removeEventListener("firestore-error", handleError);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const showToast = useCallback(msg => {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
