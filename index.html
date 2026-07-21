@@ -472,6 +472,11 @@ const CompassIcon = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/
 }), /*#__PURE__*/React.createElement("polygon", {
   points: "16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"
 }));
+const EditIcon = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("path", {
+  d: "M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"
+}), /*#__PURE__*/React.createElement("path", {
+  d: "M15 5l4 4"
+}));
 const BookIcon = p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("path", {
   d: "M4 19.5A2.5 2.5 0 0 1 6.5 17H20"
 }), /*#__PURE__*/React.createElement("path", {
@@ -1156,6 +1161,7 @@ function BudgetTracker() {
   const [validationResult, setValidationResult] = useState(null);
   const [validationAccount, setValidationAccount] = useState("Citi");
   const [formOpen, setFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [fAmount, setFAmount] = useState("");
   const [fCategory, setFCategory] = useState("groceries");
   const [fDate, setFDate] = useState(todayISO());
@@ -1255,25 +1261,56 @@ function BudgetTracker() {
       month: m
     });
   }
-  function addTransaction(e) {
+  function submitTransaction(e) {
     e.preventDefault();
     const amt = parseFloat(fAmount);
     if (!amt || amt <= 0) {
       showToast("Enter an amount greater than $0");
       return;
     }
-    const t = {
-      id: "t-" + Date.now(),
-      date: fDate,
-      categoryId: fCategory,
-      amount: Math.round(amt * 100) / 100,
-      note: fNote.trim()
-    };
-    setTransactions([t, ...transactions]);
+    if (editingId) {
+      setTransactions(transactions.map(t => t.id === editingId ? {
+        ...t,
+        date: fDate,
+        categoryId: fCategory,
+        amount: Math.round(amt * 100) / 100,
+        note: fNote.trim()
+      } : t));
+      showToast("Updated " + fmtMoney(amt, 2));
+    } else {
+      const t = {
+        id: "t-" + Date.now(),
+        date: fDate,
+        categoryId: fCategory,
+        amount: Math.round(amt * 100) / 100,
+        note: fNote.trim()
+      };
+      setTransactions([t, ...transactions]);
+      showToast("Logged " + fmtMoney(amt, 2));
+    }
+    closeForm();
+  }
+  function startEdit(t) {
+    setEditingId(t.id);
+    setFAmount(String(t.amount));
+    setFCategory(t.categoryId);
+    setFDate(t.date);
+    setFNote(t.note || "");
+    setFormOpen(true);
+  }
+  function openAddForm() {
+    setEditingId(null);
+    setFAmount("");
+    setFCategory("groceries");
+    setFDate(todayISO());
+    setFNote("");
+    setFormOpen(true);
+  }
+  function closeForm() {
+    setFormOpen(false);
+    setEditingId(null);
     setFAmount("");
     setFNote("");
-    setFormOpen(false);
-    showToast("Logged " + fmtMoney(amt, 2));
   }
   function deleteTransaction(id) {
     setTransactions(transactions.filter(t => t.id !== id));
@@ -1512,7 +1549,7 @@ function BudgetTracker() {
       e.target.value = "";
     }
   }), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setFormOpen(true),
+    onClick: () => openAddForm(),
     style: {
       background: COLORS.brass,
       color: COLORS.ink,
@@ -1578,11 +1615,13 @@ function BudgetTracker() {
     catById: catById,
     shiftMonth: shiftMonth,
     isCurrentMonth: isCurrentMonth,
-    deleteTransaction: deleteTransaction
+    deleteTransaction: deleteTransaction,
+    startEdit: startEdit
   }), tab === "log" && /*#__PURE__*/React.createElement(LogView, {
     transactions: transactions,
     catById: catById,
-    deleteTransaction: deleteTransaction
+    deleteTransaction: deleteTransaction,
+    startEdit: startEdit
   }), tab === "vendors" && /*#__PURE__*/React.createElement(VendorsView, {
     year: year,
     month: month,
@@ -1607,8 +1646,9 @@ function BudgetTracker() {
     validationResult: validationResult,
     onFileChosen: file => validateStatementFile(file, validationAccount)
   }))), formOpen && /*#__PURE__*/React.createElement(QuickAddModal, {
-    onClose: () => setFormOpen(false),
-    onSubmit: addTransaction,
+    onClose: closeForm,
+    onSubmit: submitTransaction,
+    isEditing: !!editingId,
     amount: fAmount,
     setAmount: setFAmount,
     category: fCategory,
@@ -1655,7 +1695,8 @@ function TodayView({
   catById,
   shiftMonth,
   isCurrentMonth,
-  deleteTransaction
+  deleteTransaction,
+  startEdit
 }) {
   const todaysTxns = monthTxns.filter(t => t.date === todayISO());
   const listTxns = isCurrentMonth ? todaysTxns : monthTxns;
@@ -1756,7 +1797,8 @@ function TodayView({
     key: t.id,
     t: t,
     cat: catById[t.categoryId],
-    onDelete: () => deleteTransaction(t.id)
+    onDelete: () => deleteTransaction(t.id),
+    onEdit: () => startEdit(t)
   })))));
 }
 function StatBox({
@@ -1791,7 +1833,8 @@ function StatBox({
 function TxnRow({
   t,
   cat,
-  onDelete
+  onDelete,
+  onEdit
 }) {
   const [hover, setHover] = useState(false);
   return /*#__PURE__*/React.createElement("div", {
@@ -1853,7 +1896,21 @@ function TxnRow({
       fontSize: "14px"
     }
   }, fmtMoney(t.amount, 2)), /*#__PURE__*/React.createElement("button", {
+    onClick: onEdit,
+    "aria-label": "Edit transaction",
+    style: {
+      background: "none",
+      border: "none",
+      color: COLORS.paperDim,
+      opacity: hover ? 1 : 0,
+      transition: "opacity 0.15s",
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement(EditIcon, {
+    size: 14
+  })), /*#__PURE__*/React.createElement("button", {
     onClick: onDelete,
+    "aria-label": "Delete transaction",
     style: {
       background: "none",
       border: "none",
@@ -1883,7 +1940,8 @@ function EmptyState({
 function LogView({
   transactions,
   catById,
-  deleteTransaction
+  deleteTransaction,
+  startEdit
 }) {
   const [filter, setFilter] = useState("all");
   const sorted = [...transactions].sort((a, b) => b.date.localeCompare(a.date));
@@ -1931,7 +1989,8 @@ function LogView({
     key: t.id,
     t: t,
     cat: catById[t.categoryId],
-    onDelete: () => deleteTransaction(t.id)
+    onDelete: () => deleteTransaction(t.id),
+    onEdit: () => startEdit(t)
   }))));
 }
 function CategoriesView({
@@ -2549,6 +2608,7 @@ function ValidationReport({
 function QuickAddModal({
   onClose,
   onSubmit,
+  isEditing,
   amount,
   setAmount,
   category,
@@ -2597,7 +2657,7 @@ function QuickAddModal({
       fontSize: "16px",
       fontWeight: 600
     }
-  }, "Log an expense"), /*#__PURE__*/React.createElement("button", {
+  }, isEditing ? "Edit expense" : "Log an expense"), /*#__PURE__*/React.createElement("button", {
     onClick: onClose,
     style: {
       background: "none",
@@ -2690,7 +2750,7 @@ function QuickAddModal({
       border: "none",
       marginTop: "4px"
     }
-  }, "Log expense"))));
+  }, isEditing ? "Save changes" : "Log expense"))));
 }
 function Field({
   label,
