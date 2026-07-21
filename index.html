@@ -1233,7 +1233,7 @@ function BudgetTracker() {
   } = viewMonth;
   const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
   const monthTxns = useMemo(() => transactions.filter(t => t.date.startsWith(monthKey)), [transactions, monthKey]);
-  const monthTotal = useMemo(() => monthTxns.reduce((s, t) => s + t.amount, 0), [monthTxns]);
+  const monthTotal = useMemo(() => monthTxns.filter(t => t.categoryId !== "mortgage" && t.categoryId !== "aoao").reduce((s, t) => s + t.amount, 0), [monthTxns]);
   const now = new Date();
   const isCurrentMonth = year === now.getFullYear() && month === now.getMonth();
   const dim = daysInMonth(year, month);
