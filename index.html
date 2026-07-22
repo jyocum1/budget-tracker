@@ -368,24 +368,22 @@ window.startGoogleSignIn = function () {
   // redirect flow's storage handoff. Only fall back to a full-page
   // redirect if the environment can't open a popup at all.
   signInWithPopup(auth, provider).catch(err => {
-    const code = err && err.code;
-    if (code === "auth/popup-blocked" || code === "auth/operation-not-supported-in-this-environment" || code === "auth/cancelled-popup-request") {
+    const code = (err && err.code) || "unknown";
+    console.error("Google sign-in failed:", code, err);
+    if (code === "auth/popup-blocked" || code === "auth/operation-not-supported-in-this-environment") {
       signInWithRedirect(auth, provider).catch(err2 => {
         console.error("Redirect fallback failed:", err2);
         window.dispatchEvent(new CustomEvent("auth-status", {
-          detail: { status: "error", error: String(err2) }
+          detail: { status: "error", error: (err2 && err2.code) || String(err2) }
         }));
       });
       return;
     }
-    if (code === "auth/popup-closed-by-user") {
-      // User backed out of the sign-in window -- just go back to signed-out, no error banner.
-      window.dispatchEvent(new CustomEvent("auth-status", { detail: { status: "signed-out" } }));
-      return;
-    }
-    console.error("Popup sign-in failed:", err);
+    // Every other failure (popup closed early, cancelled, blocked domain,
+    // network issue, etc.) is shown on screen with its real code -- no
+    // silent fallbacks, since that's what hid the problem last time.
     window.dispatchEvent(new CustomEvent("auth-status", {
-      detail: { status: "error", error: String(err) }
+      detail: { status: "error", error: code }
     }));
   });
 };
@@ -398,7 +396,7 @@ window.signOutOfBudgetTracker = function () {
 getRedirectResult(auth).catch(err => {
   console.error("Redirect result error:", err);
   window.dispatchEvent(new CustomEvent("auth-status", {
-    detail: { status: "error", error: String(err) }
+    detail: { status: "error", error: (err && err.code) || String(err) }
   }));
 });
 
@@ -6295,7 +6293,28 @@ function BudgetTracker() {
       fontSize: "11px",
       letterSpacing: "1px"
     }
-  }, "DAILY TRACKING · 2026 REDUCED PLAN"))), /*#__PURE__*/React.createElement("div", {
+  }, "DAILY TRACKING · 2026 REDUCED PLAN"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "5px",
+      marginTop: "3px"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: "6px",
+      height: "6px",
+      borderRadius: "50%",
+      background: syncStatus === "synced" ? COLORS.teal : syncStatus === "offline" ? COLORS.coral : COLORS.paperDim,
+      display: "inline-block"
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: COLORS.paperDim,
+      fontSize: "10px",
+      letterSpacing: "0.5px"
+    }
+  }, syncStatus === "synced" ? "SYNCED" : syncStatus === "offline" ? "SYNC ERROR" : "CONNECTING\u2026")))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -7572,11 +7591,13 @@ function Field({
 function AuthGate() {
   const [status, setStatus] = useState(() => window.__lastAuthStatus ? window.__lastAuthStatus.status : "checking");
   const [deniedEmail, setDeniedEmail] = useState(() => window.__lastAuthStatus ? window.__lastAuthStatus.email || null : null);
+  const [errorCode, setErrorCode] = useState(() => window.__lastAuthStatus ? window.__lastAuthStatus.error || null : null);
   useEffect(() => {
     function onAuthStatus(e) {
       const detail = e.detail || {};
       setStatus(detail.status);
       if (detail.status === "denied") setDeniedEmail(detail.email || null);
+      setErrorCode(detail.status === "error" ? detail.error || "unknown" : null);
     }
     window.addEventListener("auth-status", onAuthStatus);
     return () => window.removeEventListener("auth-status", onAuthStatus);
@@ -7584,7 +7605,7 @@ function AuthGate() {
   if (status === "signed-in") {
     return /*#__PURE__*/React.createElement(BudgetTracker, null);
   }
-  const message = status === "denied" ? `${deniedEmail || "That account"} isn't authorized for this budget.` : status === "error" ? "Sign-in failed -- try again." : status === "checking" ? "Checking sign-in status\u2026" : null;
+  const message = status === "denied" ? `${deniedEmail || "That account"} isn't authorized for this budget.` : status === "error" ? `Sign-in failed: ${errorCode || "unknown error"}` : status === "checking" ? "Checking sign-in status\u2026" : null;
   return /*#__PURE__*/React.createElement("div", {
     style: {
       background: COLORS.ink,
