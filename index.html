@@ -808,14 +808,14 @@ function extractStatementRows(rows) {
   const idx = name => header.findIndex(h => h.toLowerCase() === name.toLowerCase());
   const idxLike = re => header.findIndex(h => re.test(h));
 
-  // FHB-style: Status, Date, Description, Debit, Credit, Member Name
+  // FHB-style: Status, Date (or Post Date), Description, Debit, Credit, Member Name
   if (idx("Status") >= 0 && idx("Debit") >= 0 && idx("Credit") >= 0) {
-    const dI = idx("Date"),
+    const dI = idx("Date") >= 0 ? idx("Date") : idx("Post Date"),
       descI = idx("Description"),
       debI = idx("Debit");
     const out = [];
     for (const row of dataRows) {
-      const date = normalizeDateStr(row[dI]);
+      const date = dI >= 0 ? normalizeDateStr(row[dI]) : null;
       const amt = parseFloat(row[debI]);
       if (!date || isNaN(amt) || amt <= 0) continue;
       out.push({
