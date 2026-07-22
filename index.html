@@ -326,7 +326,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
 import { getFirestore, doc, onSnapshot, setDoc, enableIndexedDbPersistence } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
+import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyANG-kYcZrW86BplwMubf4CkLqiiOWMODE",
@@ -337,9 +337,14 @@ const firebaseConfig = {
   appId: "1:770594927410:web:5ec5d02dd5ba9197c01d2b"
 };
 
+// Only this Google account may read or write the budget data -- must match
+// the Firestore security rule exactly.
+const ALLOWED_EMAIL = "janet.yocum@gmail.com";
+
 const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
 const auth = getAuth(fbApp);
+const provider = new GoogleAuthProvider();
 const dataDocRef = doc(db, "budgetTracker", "data");
 
 try {
@@ -351,14 +356,51 @@ try {
 let authReadyResolve;
 const authReady = new Promise(res => { authReadyResolve = res; });
 
-onAuthStateChanged(auth, user => {
-  if (user) {
-    authReadyResolve();
-  }
+// React may mount after the first auth-status event fires -- keep the latest
+// status on window so AuthGate can read it directly instead of missing it.
+window.__lastAuthStatus = { status: "checking" };
+window.addEventListener("auth-status", e => {
+  window.__lastAuthStatus = e.detail;
 });
-signInAnonymously(auth).catch(err => {
-  console.error("Anonymous sign-in failed:", err);
-  window.dispatchEvent(new CustomEvent("firestore-error", { detail: err }));
+
+window.startGoogleSignIn = function () {
+  signInWithRedirect(auth, provider).catch(err => {
+    console.error("Sign-in redirect failed:", err);
+    window.dispatchEvent(new CustomEvent("auth-status", {
+      detail: { status: "error", error: String(err) }
+    }));
+  });
+};
+
+window.signOutOfBudgetTracker = function () {
+  signOut(auth).catch(err => console.error("Sign-out failed:", err));
+};
+
+// Resolves the account when landing back from the Google redirect flow.
+getRedirectResult(auth).catch(err => {
+  console.error("Redirect result error:", err);
+  window.dispatchEvent(new CustomEvent("auth-status", {
+    detail: { status: "error", error: String(err) }
+  }));
+});
+
+onAuthStateChanged(auth, user => {
+  if (!user) {
+    window.dispatchEvent(new CustomEvent("auth-status", { detail: { status: "signed-out" } }));
+    return;
+  }
+  if (user.email !== ALLOWED_EMAIL) {
+    // Signed into the wrong Google account -- deny and sign back out immediately.
+    signOut(auth);
+    window.dispatchEvent(new CustomEvent("auth-status", {
+      detail: { status: "denied", email: user.email }
+    }));
+    return;
+  }
+  window.dispatchEvent(new CustomEvent("auth-status", {
+    detail: { status: "signed-in", email: user.email }
+  }));
+  authReadyResolve();
 });
 
 let saveTimer = null;
@@ -751,7 +793,4744 @@ const DEFAULT_CATEGORIES = [{
   fixed: true,
   essential: true
 }];
-const DEFAULT_TRANSACTIONS = [];
+const DEFAULT_TRANSACTIONS = [{
+  id: "t2026-0001",
+  date: "2026-07-06",
+  categoryId: "subs",
+  amount: 39.74,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0002",
+  date: "2026-07-06",
+  categoryId: "membership",
+  amount: 136.13,
+  vendor: "Costco *Annual Renewal",
+  note: "Citi: COSTCO *ANNUAL RENEWAL 800-774-2678 WA"
+}, {
+  id: "t2026-0003",
+  date: "2026-07-03",
+  categoryId: "groceries",
+  amount: 43.11,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0004",
+  date: "2026-06-29",
+  categoryId: "groceries",
+  amount: 38.7,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0005",
+  date: "2026-06-28",
+  categoryId: "groceries",
+  amount: 98.24,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0006",
+  date: "2026-06-27",
+  categoryId: "groceries",
+  amount: 226.67,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0007",
+  date: "2026-06-27",
+  categoryId: "groceries",
+  amount: 12.73,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0008",
+  date: "2026-06-27",
+  categoryId: "travel",
+  amount: 491.57,
+  vendor: "Hertz Car Rental Www.Hertz.Comhi",
+  note: "Citi: HERTZ CAR RENTAL WWW.HERTZ.COMHI"
+}, {
+  id: "t2026-0009",
+  date: "2026-06-25",
+  categoryId: "dining",
+  amount: 84.78,
+  vendor: "Kbxtreme Llc - Dinerkailua-Kona Hi",
+  note: "Citi: TST* KBXTREME LLC - DINERKAILUA-KONA HI"
+}, {
+  id: "t2026-0010",
+  date: "2026-06-22",
+  categoryId: "pharmacy",
+  amount: 35.47,
+  vendor: "Longs Drugs",
+  note: "Citi: LONGS #09185 HONOLULU HI"
+}, {
+  id: "t2026-0011",
+  date: "2026-06-22",
+  categoryId: "pharmacy",
+  amount: 35,
+  vendor: "Longs Drugs",
+  note: "Citi: LONGS #09185 HONOLULU HI"
+}, {
+  id: "t2026-0012",
+  date: "2026-06-21",
+  categoryId: "groceries",
+  amount: 164.59,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0013",
+  date: "2026-06-21",
+  categoryId: "dining",
+  amount: 69.51,
+  vendor: "Original",
+  note: "Citi: ORIGINAL PANCAKE HOUSE HONOLULU HI"
+}, {
+  id: "t2026-0014",
+  date: "2026-06-21",
+  categoryId: "parking",
+  amount: 1.6,
+  vendor: "Propark-Kekaulike",
+  note: "Citi: PROPARK-KEKAULIKE COURTY HONOLULU HI"
+}, {
+  id: "t2026-0015",
+  date: "2026-06-21",
+  categoryId: "travel",
+  amount: 491.79,
+  vendor: "Hertz Car Rental Www.Hertz.Comhi",
+  note: "Citi: HERTZ CAR RENTAL WWW.HERTZ.COMHI"
+}, {
+  id: "t2026-0016",
+  date: "2026-06-19",
+  categoryId: "dining",
+  amount: 93.77,
+  vendor: "Courtyard Kona Beach Kailua-Kona Hi",
+  note: "Citi: COURTYARD KONA BEACH KAILUA-KONA HI"
+}, {
+  id: "t2026-0017",
+  date: "2026-06-17",
+  categoryId: "dining",
+  amount: 39.64,
+  vendor: "Cheeky Tiki Kailua-Kona Hi",
+  note: "Citi: TST* CHEEKY TIKI KAILUA-KONA HI"
+}, {
+  id: "t2026-0018",
+  date: "2026-06-15",
+  categoryId: "phone",
+  amount: 52.97,
+  vendor: "At&T Mobility Epay Kh4589@Att.Cotx",
+  note: "Citi: AT&T MOBILITY EPAY KH4589@ATT.COTX"
+}, {
+  id: "t2026-0019",
+  date: "2026-06-15",
+  categoryId: "dining",
+  amount: 16.95,
+  vendor: "Mega",
+  note: "Citi: MEGA DRUG TAMUNING TAMUNING GU"
+}, {
+  id: "t2026-0020",
+  date: "2026-06-15",
+  categoryId: "subs",
+  amount: 5.23,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0021",
+  date: "2026-06-14",
+  categoryId: "shopping",
+  amount: 32.96,
+  vendor: "Kmart Guam",
+  note: "Citi: KMART GUAM 7705 TAMUNING GU"
+}, {
+  id: "t2026-0022",
+  date: "2026-06-13",
+  categoryId: "subs",
+  amount: 175,
+  vendor: "Kickstarter.Com Www.Finalpiecny",
+  note: "Citi: KICKSTARTER.COM WWW.FINALPIECNY"
+}, {
+  id: "t2026-0023",
+  date: "2026-06-12",
+  categoryId: "groceries",
+  amount: 15.86,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0024",
+  date: "2026-06-11",
+  categoryId: "groceries",
+  amount: 213.83,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0025",
+  date: "2026-06-10",
+  categoryId: "subs",
+  amount: 0.25,
+  vendor: "Dtsparksmarter",
+  note: "Citi: DTSPARKSMARTER 808-768-8358 HI"
+}, {
+  id: "t2026-0026",
+  date: "2026-06-10",
+  categoryId: "subs",
+  amount: 0.5,
+  vendor: "Dtsparksmarter",
+  note: "Citi: DTSPARKSMARTER 808-768-8358 HI"
+}, {
+  id: "t2026-0027",
+  date: "2026-06-10",
+  categoryId: "gas",
+  amount: 100.19,
+  vendor: "Texaco 0099070",
+  note: "Citi: TEXACO 0099070 HONOLULU HI"
+}, {
+  id: "t2026-0028",
+  date: "2026-06-10",
+  categoryId: "parking",
+  amount: 4,
+  vendor: "Punchbowl",
+  note: "Citi: PUNCHBOWL PARKING HONOLULU HI"
+}, {
+  id: "t2026-0029",
+  date: "2026-06-09",
+  categoryId: "groceries",
+  amount: 119.05,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0030",
+  date: "2026-06-07",
+  categoryId: "subs",
+  amount: 7.31,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0031",
+  date: "2026-06-06",
+  categoryId: "subs",
+  amount: 39.74,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0032",
+  date: "2026-06-05",
+  categoryId: "groceries",
+  amount: 29.31,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0033",
+  date: "2026-06-04",
+  categoryId: "parking",
+  amount: 7.28,
+  vendor: "Diamond Parking H0444",
+  note: "Citi: DIAMOND PARKING H0444 HONOLULU HI"
+}, {
+  id: "t2026-0034",
+  date: "2026-06-04",
+  categoryId: "gas",
+  amount: 7.61,
+  vendor: "7-Eleven",
+  note: "Citi: 7-ELEVEN #54257 HONOLULU HI"
+}, {
+  id: "t2026-0035",
+  date: "2026-06-03",
+  categoryId: "dining",
+  amount: 42.79,
+  vendor: "Panda Express",
+  note: "Citi: PANDA EXPRESS #186 HONOLULU HI"
+}, {
+  id: "t2026-0036",
+  date: "2026-06-03",
+  categoryId: "pet",
+  amount: 1057.94,
+  vendor: "Hawaii",
+  note: "Citi: HAWAII KAI VETERINARY CLIHONOLULU HI"
+}, {
+  id: "t2026-0037",
+  date: "2026-06-02",
+  categoryId: "subs",
+  amount: 50,
+  vendor: "Meidastouch Network Meidasplus.Coca",
+  note: "Citi: MEIDASTOUCH NETWORK MEIDASPLUS.COCA"
+}, {
+  id: "t2026-0038",
+  date: "2026-05-30",
+  categoryId: "gas",
+  amount: 103.09,
+  vendor: "Texaco 0091507",
+  note: "Citi: TEXACO 0091507 HONOLULU HI"
+}, {
+  id: "t2026-0039",
+  date: "2026-05-30",
+  categoryId: "groceries",
+  amount: 153.73,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0040",
+  date: "2026-05-26",
+  categoryId: "groceries",
+  amount: 9.31,
+  vendor: "McDonald's",
+  note: "Citi: MCDONALD'S M4944 OF HI HONOLULU HI"
+}, {
+  id: "t2026-0041",
+  date: "2026-05-25",
+  categoryId: "dining",
+  amount: 13.25,
+  vendor: "05",
+  note: "Citi: 05 ZIPPYS KAPAHULU MOB olo.com HI"
+}, {
+  id: "t2026-0042",
+  date: "2026-05-24",
+  categoryId: "shopping",
+  amount: 107.3,
+  vendor: "Petco",
+  note: "Citi: PETCO 1198 HONOLULU HI"
+}, {
+  id: "t2026-0043",
+  date: "2026-05-24",
+  categoryId: "groceries",
+  amount: 119.51,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0044",
+  date: "2026-05-23",
+  categoryId: "groceries",
+  amount: 26.39,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0045",
+  date: "2026-05-20",
+  categoryId: "groceries",
+  amount: 82.15,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0046",
+  date: "2026-05-20",
+  categoryId: "groceries",
+  amount: 60.45,
+  vendor: "Times Supermkt #02",
+  note: "Citi: TIMES SUPERMKT #02 HONOLULU HI"
+}, {
+  id: "t2026-0047",
+  date: "2026-05-20",
+  categoryId: "shopping",
+  amount: 7.07,
+  vendor: "Crack",
+  note: "Citi: CRACK SEED STORE HONOLULU HI"
+}, {
+  id: "t2026-0048",
+  date: "2026-05-20",
+  categoryId: "groceries",
+  amount: 26.16,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0687 HONOLULU HI"
+}, {
+  id: "t2026-0049",
+  date: "2026-05-20",
+  categoryId: "groceries",
+  amount: 64.34,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0050",
+  date: "2026-05-20",
+  categoryId: "shopping",
+  amount: 108.4,
+  vendor: "Paypal *Walmart Com Walma800-925-6278 Ca",
+  note: "Citi: PAYPAL *WALMART COM WALMA800-925-6278 CA"
+}, {
+  id: "t2026-0051",
+  date: "2026-05-20",
+  categoryId: "groceries",
+  amount: 104.85,
+  vendor: "Gnc",
+  note: "Citi: GNC HONOLULU HI"
+}, {
+  id: "t2026-0052",
+  date: "2026-05-20",
+  categoryId: "insurance",
+  amount: 523.45,
+  vendor: "State Farm Insurance",
+  note: "Citi: STATE FARM INSURANCE 800-956-6310 IL"
+}, {
+  id: "t2026-0053",
+  date: "2026-05-19",
+  categoryId: "shopping",
+  amount: 74.95,
+  vendor: "Jerky Labs Jerkylabshawahi",
+  note: "Citi: SP JERKY LABS JERKYLABSHAWAHI"
+}, {
+  id: "t2026-0054",
+  date: "2026-05-19",
+  categoryId: "pharmacy",
+  amount: 10.98,
+  vendor: "Longs Drugs",
+  note: "Citi: LONGS #09185 HONOLULU HI"
+}, {
+  id: "t2026-0055",
+  date: "2026-05-19",
+  categoryId: "shopping",
+  amount: 74.95,
+  vendor: "Jerky Labs Jerkylabshawahi",
+  note: "Citi: SP JERKY LABS JERKYLABSHAWAHI"
+}, {
+  id: "t2026-0056",
+  date: "2026-05-18",
+  categoryId: "pharmacy",
+  amount: 4.18,
+  vendor: "Longs Drugs",
+  note: "Citi: LONGS #09185 HONOLULU HI"
+}, {
+  id: "t2026-0057",
+  date: "2026-05-18",
+  categoryId: "pharmacy",
+  amount: 38.65,
+  vendor: "Longs Drugs",
+  note: "Citi: LONGS #09185 HONOLULU HI"
+}, {
+  id: "t2026-0058",
+  date: "2026-05-17",
+  categoryId: "pharmacy",
+  amount: 18.59,
+  vendor: "Longs Drugs",
+  note: "Citi: LONGS #09185 HONOLULU HI"
+}, {
+  id: "t2026-0059",
+  date: "2026-05-17",
+  categoryId: "groceries",
+  amount: 175.58,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0060",
+  date: "2026-05-17",
+  categoryId: "shopping",
+  amount: 89.1,
+  vendor: "Ross Store",
+  note: "Citi: ROSS STORE #378 HONOLULU HI"
+}, {
+  id: "t2026-0061",
+  date: "2026-05-17",
+  categoryId: "groceries",
+  amount: 52.09,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0062",
+  date: "2026-05-17",
+  categoryId: "groceries",
+  amount: 385.67,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0063",
+  date: "2026-05-16",
+  categoryId: "dining",
+  amount: 94.34,
+  vendor: "Genki Sushi-",
+  note: "Citi: TST* GENKI SUSHI- KAPAHULHONOLULU HI"
+}, {
+  id: "t2026-0064",
+  date: "2026-05-16",
+  categoryId: "gas",
+  amount: 95.2,
+  vendor: "Texaco 0094871",
+  note: "Citi: TEXACO 0094871 HONOLULU HI"
+}, {
+  id: "t2026-0065",
+  date: "2026-05-16",
+  categoryId: "parking",
+  amount: 2,
+  vendor: "Propark-Chinatown",
+  note: "Citi: PROPARK-CHINATOWN CULTUR HONOLULU HI"
+}, {
+  id: "t2026-0066",
+  date: "2026-05-15",
+  categoryId: "phone",
+  amount: 52.97,
+  vendor: "At&T Mobility Epay Kh4589@Att.Cotx",
+  note: "Citi: AT&T MOBILITY EPAY KH4589@ATT.COTX"
+}, {
+  id: "t2026-0067",
+  date: "2026-05-15",
+  categoryId: "dining",
+  amount: 14.3,
+  vendor: "Uomaru",
+  note: "Citi: UOMARU HONTEN RESTAUR TUMON GU"
+}, {
+  id: "t2026-0068",
+  date: "2026-05-15",
+  categoryId: "dining",
+  amount: 74,
+  vendor: "Westin Rsrt Guam Fd 6716471020 Gu",
+  note: "Citi: WESTIN RSRT GUAM FD 6716471020 GU"
+}, {
+  id: "t2026-0069",
+  date: "2026-05-15",
+  categoryId: "dining",
+  amount: 13,
+  vendor: "Tommys",
+  note: "Citi: TOMMYS PIZZA SHOPPE HAGATNA GU"
+}, {
+  id: "t2026-0070",
+  date: "2026-05-14",
+  categoryId: "dining",
+  amount: 5,
+  vendor: "Westin",
+  note: "Citi: WESTIN RSRT GUAM LAUNDRY TAMUNING GU"
+}, {
+  id: "t2026-0071",
+  date: "2026-05-14",
+  categoryId: "dining",
+  amount: 5,
+  vendor: "Westin",
+  note: "Citi: WESTIN RSRT GUAM LAUNDRY TAMUNING GU"
+}, {
+  id: "t2026-0072",
+  date: "2026-05-14",
+  categoryId: "dining",
+  amount: 77.96,
+  vendor: "Pizza Hut",
+  note: "Citi: PIZZA HUT #031286 AGANA GU"
+}, {
+  id: "t2026-0073",
+  date: "2026-05-13",
+  categoryId: "dining",
+  amount: 19.7,
+  vendor: "Marugame",
+  note: "Citi: MARUGAME UDON TAMUNING GU"
+}, {
+  id: "t2026-0074",
+  date: "2026-05-12",
+  categoryId: "dining",
+  amount: 36.02,
+  vendor: "Fuji",
+  note: "Citi: FUJI ICHIBAN TUMON GU"
+}, {
+  id: "t2026-0075",
+  date: "2026-05-10",
+  categoryId: "groceries",
+  amount: 23.45,
+  vendor: "Payless",
+  note: "Citi: PAYLESS SUPERMARKET MAITEMAITE GU"
+}, {
+  id: "t2026-0076",
+  date: "2026-05-10",
+  categoryId: "dining",
+  amount: 30.2,
+  vendor: "Kings",
+  note: "Citi: KINGS RESTAURANT TAMUNING GU"
+}, {
+  id: "t2026-0077",
+  date: "2026-05-10",
+  categoryId: "shopping",
+  amount: 17.37,
+  vendor: "Kmart Guam",
+  note: "Citi: KMART GUAM 7705 TAMUNING GU"
+}, {
+  id: "t2026-0078",
+  date: "2026-05-09",
+  categoryId: "dining",
+  amount: 5,
+  vendor: "Westin",
+  note: "Citi: WESTIN RSRT GUAM LAUNDRY TAMUNING GU"
+}, {
+  id: "t2026-0079",
+  date: "2026-05-09",
+  categoryId: "dining",
+  amount: 5,
+  vendor: "Westin",
+  note: "Citi: WESTIN RSRT GUAM LAUNDRY TAMUNING GU"
+}, {
+  id: "t2026-0080",
+  date: "2026-05-07",
+  categoryId: "dining",
+  amount: 38.75,
+  vendor: "Crown Bakery",
+  note: "Citi: CROWN BAKERY, INC BARRIGADA GU"
+}, {
+  id: "t2026-0081",
+  date: "2026-05-06",
+  categoryId: "subs",
+  amount: 39.74,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0082",
+  date: "2026-05-05",
+  categoryId: "groceries",
+  amount: 25.72,
+  vendor: "Payless",
+  note: "Citi: PAYLESS SUPERMARKET MAITEMAITE GU"
+}, {
+  id: "t2026-0083",
+  date: "2026-05-02",
+  categoryId: "gas",
+  amount: 81.72,
+  vendor: "Texaco 0090258",
+  note: "Citi: TEXACO 0090258 HONOLULU HI"
+}, {
+  id: "t2026-0084",
+  date: "2026-05-02",
+  categoryId: "groceries",
+  amount: 80,
+  vendor: "Asahi",
+  note: "Citi: ASAHI GRILL HONOLULU HI"
+}, {
+  id: "t2026-0085",
+  date: "2026-05-01",
+  categoryId: "groceries",
+  amount: 25.52,
+  vendor: "Marukai #34",
+  note: "Citi: MARUKAI #34 HONOLULU HI"
+}, {
+  id: "t2026-0086",
+  date: "2026-04-30",
+  categoryId: "shopping",
+  amount: 214.66,
+  vendor: "Thekealopikoshop",
+  note: "Citi: SP THEKEALOPIKOSHOP 180-82169229 HI"
+}, {
+  id: "t2026-0087",
+  date: "2026-04-29",
+  categoryId: "groceries",
+  amount: 9.64,
+  vendor: "Diamond",
+  note: "Citi: TST*DIAMOND HEAD MARKET Honolulu HI"
+}, {
+  id: "t2026-0088",
+  date: "2026-04-26",
+  categoryId: "groceries",
+  amount: 38.83,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0089",
+  date: "2026-04-25",
+  categoryId: "groceries",
+  amount: 20,
+  vendor: "Kapahulu",
+  note: "Citi: KAPAHULU XPRESS LAUNDR HONOLULU HI"
+}, {
+  id: "t2026-0090",
+  date: "2026-04-25",
+  categoryId: "groceries",
+  amount: 50,
+  vendor: "Kapahulu",
+  note: "Citi: KAPAHULU XPRESS LAUNDR HONOLULU HI"
+}, {
+  id: "t2026-0091",
+  date: "2026-04-23",
+  categoryId: "groceries",
+  amount: 179.22,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0092",
+  date: "2026-04-22",
+  categoryId: "groceries",
+  amount: 190.75,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0093",
+  date: "2026-04-21",
+  categoryId: "groceries",
+  amount: 105.98,
+  vendor: "Shell Oil 12578168002",
+  note: "Citi: SHELL OIL 12578168002 HONOLULU HI"
+}, {
+  id: "t2026-0094",
+  date: "2026-04-21",
+  categoryId: "groceries",
+  amount: 68.93,
+  vendor: "Narita",
+  note: "Citi: NARITA AIRPORT Tokyo JP"
+}, {
+  id: "t2026-0095",
+  date: "2026-04-21",
+  categoryId: "travel",
+  amount: 14.55,
+  vendor: "Narita",
+  note: "Citi: NARITA AIRPORT CHIBA JP"
+}, {
+  id: "t2026-0096",
+  date: "2026-04-17",
+  categoryId: "groceries",
+  amount: 20.76,
+  vendor: "Don",
+  note: "Citi: DON DON DONKI TAMUNING GU"
+}, {
+  id: "t2026-0097",
+  date: "2026-04-16",
+  categoryId: "groceries",
+  amount: 16.5,
+  vendor: "Payless",
+  note: "Citi: PAYLESS SPRMKTS OKA TAMUNING GU"
+}, {
+  id: "t2026-0098",
+  date: "2026-04-16",
+  categoryId: "shopping",
+  amount: 162.35,
+  vendor: "Kmart Guam",
+  note: "Citi: KMART GUAM 7705 TAMUNING GU"
+}, {
+  id: "t2026-0099",
+  date: "2026-04-15",
+  categoryId: "phone",
+  amount: 52.97,
+  vendor: "At&T Mobility Epay Kh4589@Att.Cotx",
+  note: "Citi: AT&T MOBILITY EPAY KH4589@ATT.COTX"
+}, {
+  id: "t2026-0100",
+  date: "2026-04-11",
+  categoryId: "gas",
+  amount: 64,
+  vendor: "Texaco 0094871",
+  note: "Citi: TEXACO 0094871 HONOLULU HI"
+}, {
+  id: "t2026-0101",
+  date: "2026-04-11",
+  categoryId: "gas",
+  amount: 96.12,
+  vendor: "Texaco 0094871",
+  note: "Citi: TEXACO 0094871 HONOLULU HI"
+}, {
+  id: "t2026-0102",
+  date: "2026-04-10",
+  categoryId: "pharmacy",
+  amount: 12.94,
+  vendor: "Longs Drugs",
+  note: "Citi: LONGS #09185 HONOLULU HI"
+}, {
+  id: "t2026-0103",
+  date: "2026-04-10",
+  categoryId: "groceries",
+  amount: 194.47,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0104",
+  date: "2026-04-09",
+  categoryId: "subs",
+  amount: 104.7,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0105",
+  date: "2026-04-09",
+  categoryId: "groceries",
+  amount: 109.94,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0106",
+  date: "2026-04-06",
+  categoryId: "subs",
+  amount: 39.74,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0107",
+  date: "2026-04-03",
+  categoryId: "groceries",
+  amount: 15.15,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0108",
+  date: "2026-04-03",
+  categoryId: "groceries",
+  amount: 427.8,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0109",
+  date: "2026-03-27",
+  categoryId: "home",
+  amount: 308.9,
+  vendor: "Waialae Plumbing",
+  note: "Citi: WAIALAE PLUMBING 808-7358595 HI"
+}, {
+  id: "t2026-0110",
+  date: "2026-03-26",
+  categoryId: "travel",
+  amount: 149.95,
+  vendor: "Hertz Car Rental Www.Hertz.Comhi Phone Number: Name: Pickup: Return: Agreement Number:",
+  note: "Citi: HERTZ CAR RENTAL WWW.HERTZ.COMHI PHONE NUMBER:  NAME:  PICKUP:  RETURN:  AGREEMENT NUMBER:"
+}, {
+  id: "t2026-0111",
+  date: "2026-03-25",
+  categoryId: "groceries",
+  amount: 156.04,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0112",
+  date: "2026-03-17",
+  categoryId: "pharmacy",
+  amount: 14.22,
+  vendor: "Longs Drugs",
+  note: "Citi: LONGS #09185 HONOLULU HI"
+}, {
+  id: "t2026-0113",
+  date: "2026-03-17",
+  categoryId: "groceries",
+  amount: 10.82,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0114",
+  date: "2026-03-17",
+  categoryId: "groceries",
+  amount: 17.77,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0115",
+  date: "2026-03-17",
+  categoryId: "groceries",
+  amount: 37.1,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0116",
+  date: "2026-03-16",
+  categoryId: "shopping",
+  amount: 77.18,
+  vendor: "City Mill",
+  note: "Citi: CITY MILL 180-85333811 HI"
+}, {
+  id: "t2026-0117",
+  date: "2026-03-16",
+  categoryId: "phone",
+  amount: 52.98,
+  vendor: "Att* Bill Payment Kh4589@Att.Cotx",
+  note: "Citi: ATT* BILL PAYMENT KH4589@ATT.COTX"
+}, {
+  id: "t2026-0118",
+  date: "2026-03-15",
+  categoryId: "dining",
+  amount: 36.4,
+  vendor: "Panda Express",
+  note: "Citi: PANDA EXPRESS #186 HONOLULU HI"
+}, {
+  id: "t2026-0119",
+  date: "2026-03-14",
+  categoryId: "shopping",
+  amount: 3.1,
+  vendor: "Waterbox",
+  note: "Citi: CTLP*WATERBOX LLC EWABEACH HI"
+}, {
+  id: "t2026-0120",
+  date: "2026-03-14",
+  categoryId: "shopping",
+  amount: 3.1,
+  vendor: "Waterbox",
+  note: "Citi: CTLP*WATERBOX LLC EWABEACH HI"
+}, {
+  id: "t2026-0121",
+  date: "2026-03-14",
+  categoryId: "gas",
+  amount: 67.23,
+  vendor: "Texaco 0095023",
+  note: "Citi: TEXACO 0095023 HONOLULU HI"
+}, {
+  id: "t2026-0122",
+  date: "2026-03-11",
+  categoryId: "groceries",
+  amount: 30.75,
+  vendor: "McDonald's",
+  note: "Citi: MCDONALD'S F24790 HONOLULU HI"
+}, {
+  id: "t2026-0123",
+  date: "2026-03-08",
+  categoryId: "pharmacy",
+  amount: 21.46,
+  vendor: "Longs Drugs",
+  note: "Citi: LONGS #09185 HONOLULU HI"
+}, {
+  id: "t2026-0124",
+  date: "2026-03-07",
+  categoryId: "dining",
+  amount: 39.41,
+  vendor: "Domino'S",
+  note: "Citi: DOMINO'S 18033 808-625-3800 HI"
+}, {
+  id: "t2026-0125",
+  date: "2026-03-06",
+  categoryId: "subs",
+  amount: 39.74,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0126",
+  date: "2026-03-01",
+  categoryId: "shopping",
+  amount: 34.99,
+  vendor: "Paypal *Taffy Shop",
+  note: "Citi: PAYPAL *TAFFY SHOP 402-935-7733 CA"
+}, {
+  id: "t2026-0127",
+  date: "2026-02-28",
+  categoryId: "groceries",
+  amount: 88.28,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0128",
+  date: "2026-02-26",
+  categoryId: "subs",
+  amount: 116.95,
+  vendor: "Paypal *Expressvpn",
+  note: "Citi: PAYPAL *EXPRESSVPN 402-935-7733 DE"
+}, {
+  id: "t2026-0129",
+  date: "2026-02-25",
+  categoryId: "groceries",
+  amount: 31.45,
+  vendor: "Marie",
+  note: "Citi: Marie Louise Cleaners Honolulu HI"
+}, {
+  id: "t2026-0130",
+  date: "2026-02-25",
+  categoryId: "groceries",
+  amount: 16.52,
+  vendor: "McDonald's",
+  note: "Citi: MCDONALD'S M5335 OF HI HONOLULU HI"
+}, {
+  id: "t2026-0131",
+  date: "2026-02-25",
+  categoryId: "membership",
+  amount: 467.64,
+  vendor: "Internet Mv Reg Renewal",
+  note: "Citi: INTERNET MV REG RENEWAL 808-532-4325 HI"
+}, {
+  id: "t2026-0132",
+  date: "2026-02-23",
+  categoryId: "groceries",
+  amount: 19.64,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0133",
+  date: "2026-02-22",
+  categoryId: "shopping",
+  amount: 45.87,
+  vendor: "Paypal *Wowsunriselxe86 4029357733 Hk",
+  note: "Citi: PAYPAL *WOWSUNRISELXE86 4029357733 HK"
+}, {
+  id: "t2026-0134",
+  date: "2026-02-22",
+  categoryId: "groceries",
+  amount: 114.14,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0135",
+  date: "2026-02-21",
+  categoryId: "groceries",
+  amount: 26.6,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0136",
+  date: "2026-02-21",
+  categoryId: "travel",
+  amount: 145.74,
+  vendor: "Hertz Car Rental Www.Hertz.Comok Phone Number: Name: Pickup: Return: Agreement Number:",
+  note: "Citi: HERTZ CAR RENTAL WWW.HERTZ.COMOK PHONE NUMBER:  NAME:  PICKUP:  RETURN:  AGREEMENT NUMBER:"
+}, {
+  id: "t2026-0137",
+  date: "2026-02-20",
+  categoryId: "dining",
+  amount: 51.57,
+  vendor: "Iges Lunchwagon &",
+  note: "Citi: IGES LUNCHWAGON & CATER AIEA HI"
+}, {
+  id: "t2026-0138",
+  date: "2026-02-20",
+  categoryId: "health",
+  amount: 15,
+  vendor: "Med*Ucsf Health",
+  note: "Citi: MED*UCSF HEALTH 866-433-4035 CA"
+}, {
+  id: "t2026-0139",
+  date: "2026-02-18",
+  categoryId: "groceries",
+  amount: 37.43,
+  vendor: "Times",
+  note: "Citi: TIMES SUPERMARKET HONOLULU HI"
+}, {
+  id: "t2026-0140",
+  date: "2026-02-17",
+  categoryId: "dining",
+  amount: 28.16,
+  vendor: "17",
+  note: "Citi: 17 ZIPPYS KOKO MARINA HONOLULU HI"
+}, {
+  id: "t2026-0141",
+  date: "2026-02-17",
+  categoryId: "dining",
+  amount: 27.43,
+  vendor: "Lanikai Juice -",
+  note: "Citi: LANIKAI JUICE - HAWAII K HONOLULU HI"
+}, {
+  id: "t2026-0142",
+  date: "2026-02-16",
+  categoryId: "groceries",
+  amount: 45.84,
+  vendor: "Aina",
+  note: "Citi: AINA HAINA FOODLAND FARMSHONOLULU HI"
+}, {
+  id: "t2026-0143",
+  date: "2026-02-16",
+  categoryId: "groceries",
+  amount: 7.84,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0144",
+  date: "2026-02-16",
+  categoryId: "groceries",
+  amount: 274.6,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0145",
+  date: "2026-02-15",
+  categoryId: "phone",
+  amount: 52.98,
+  vendor: "Att* Bill Payment Kh4589@Att.Cotx",
+  note: "Citi: ATT* BILL PAYMENT KH4589@ATT.COTX"
+}, {
+  id: "t2026-0146",
+  date: "2026-02-14",
+  categoryId: "dining",
+  amount: 55.4,
+  vendor: "Sing",
+  note: "Citi: SING CHEONG YUAN BAKERY HONOLULU HI"
+}, {
+  id: "t2026-0147",
+  date: "2026-02-07",
+  categoryId: "groceries",
+  amount: 25.87,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0148",
+  date: "2026-02-07",
+  categoryId: "subs",
+  amount: 6.27,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 800-275-2273 CA"
+}, {
+  id: "t2026-0149",
+  date: "2026-02-07",
+  categoryId: "groceries",
+  amount: 25.11,
+  vendor: "Aina",
+  note: "Citi: AINA HAINA FOODLAND FARMSHONOLULU HI"
+}, {
+  id: "t2026-0150",
+  date: "2026-02-07",
+  categoryId: "groceries",
+  amount: 36.68,
+  vendor: "Aina",
+  note: "Citi: AINA HAINA FOODLAND FARMSHONOLULU HI"
+}, {
+  id: "t2026-0151",
+  date: "2026-02-06",
+  categoryId: "subs",
+  amount: 39.74,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0152",
+  date: "2026-02-01",
+  categoryId: "shopping",
+  amount: 46.54,
+  vendor: "City Mill",
+  note: "Citi: CITY MILL 180-85333811 HI"
+}, {
+  id: "t2026-0153",
+  date: "2026-02-01",
+  categoryId: "groceries",
+  amount: 109.49,
+  vendor: "Times Supermkt #02",
+  note: "Citi: TIMES SUPERMKT #02 HONOLULU HI"
+}, {
+  id: "t2026-0154",
+  date: "2026-02-01",
+  categoryId: "groceries",
+  amount: 112.31,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0155",
+  date: "2026-01-30",
+  categoryId: "groceries",
+  amount: 7.32,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0156",
+  date: "2026-01-30",
+  categoryId: "groceries",
+  amount: 45.68,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0157",
+  date: "2026-01-28",
+  categoryId: "groceries",
+  amount: 56.45,
+  vendor: "Mangiamo By",
+  note: "Citi: MANGIAMO BY 604 HONOLULU HI"
+}, {
+  id: "t2026-0158",
+  date: "2026-01-27",
+  categoryId: "groceries",
+  amount: 33.76,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0159",
+  date: "2026-01-27",
+  categoryId: "subs",
+  amount: 146.58,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0160",
+  date: "2026-01-27",
+  categoryId: "groceries",
+  amount: 24.69,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0161",
+  date: "2026-01-27",
+  categoryId: "groceries",
+  amount: 205.21,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0162",
+  date: "2026-01-26",
+  categoryId: "gas",
+  amount: 75.56,
+  vendor: "Texaco 0099070",
+  note: "Citi: TEXACO 0099070 HONOLULU HI"
+}, {
+  id: "t2026-0163",
+  date: "2026-01-25",
+  categoryId: "groceries",
+  amount: 101.74,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0164",
+  date: "2026-01-23",
+  categoryId: "groceries",
+  amount: 84.86,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0165",
+  date: "2026-01-22",
+  categoryId: "subs",
+  amount: 10.46,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0166",
+  date: "2026-01-21",
+  categoryId: "groceries",
+  amount: 7.32,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0167",
+  date: "2026-01-21",
+  categoryId: "groceries",
+  amount: 14.8,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0168",
+  date: "2026-01-21",
+  categoryId: "dining",
+  amount: 53.4,
+  vendor: "Dis-And-Bark",
+  note: "Citi: SQ *DIS-AND-BARK LLC Honolulu HI"
+}, {
+  id: "t2026-0169",
+  date: "2026-01-21",
+  categoryId: "groceries",
+  amount: 48.82,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0170",
+  date: "2026-01-16",
+  categoryId: "pharmacy",
+  amount: 8.66,
+  vendor: "Longs Drugs",
+  note: "Citi: LONGS #09185 HONOLULU HI"
+}, {
+  id: "t2026-0171",
+  date: "2026-01-16",
+  categoryId: "pharmacy",
+  amount: 10.98,
+  vendor: "Longs Drugs",
+  note: "Citi: LONGS #09185 HONOLULU HI"
+}, {
+  id: "t2026-0172",
+  date: "2026-01-16",
+  categoryId: "dining",
+  amount: 14.33,
+  vendor: "Chick-Fil-A",
+  note: "Citi: CHICK-FIL-A #04508 KAPOLEI HI"
+}, {
+  id: "t2026-0173",
+  date: "2026-01-16",
+  categoryId: "groceries",
+  amount: 13.48,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0174",
+  date: "2026-01-16",
+  categoryId: "groceries",
+  amount: 389.35,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0175",
+  date: "2026-01-15",
+  categoryId: "phone",
+  amount: 115.32,
+  vendor: "Att* Bill Payment Kh4589@Att.Cotx",
+  note: "Citi: ATT* BILL PAYMENT KH4589@ATT.COTX"
+}, {
+  id: "t2026-0176",
+  date: "2026-01-15",
+  categoryId: "subs",
+  amount: 12.54,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0177",
+  date: "2026-01-11",
+  categoryId: "dining",
+  amount: 73.45,
+  vendor: "Teddysbiggerburgers 8083949100 Hi",
+  note: "Citi: TeddysBiggerBurgers 8083949100 HI"
+}, {
+  id: "t2026-0178",
+  date: "2026-01-10",
+  categoryId: "shopping",
+  amount: 37.42,
+  vendor: "Paypal *Walmart Com Walma800-925-6278 Ca",
+  note: "Citi: PAYPAL *WALMART COM WALMA800-925-6278 CA"
+}, {
+  id: "t2026-0179",
+  date: "2026-01-07",
+  categoryId: "groceries",
+  amount: 10.82,
+  vendor: "Chick-Fil-A",
+  note: "Citi: CHICK-FIL-A #04368 HONOLULU HI"
+}, {
+  id: "t2026-0180",
+  date: "2026-01-07",
+  categoryId: "subs",
+  amount: 0.25,
+  vendor: "Dtsparksmarter",
+  note: "Citi: DTSPARKSMARTER 808-768-8358 HI"
+}, {
+  id: "t2026-0181",
+  date: "2026-01-07",
+  categoryId: "subs",
+  amount: 1.88,
+  vendor: "Dtsparksmarter",
+  note: "Citi: DTSPARKSMARTER 808-768-8358 HI"
+}, {
+  id: "t2026-0182",
+  date: "2026-01-07",
+  categoryId: "subs",
+  amount: 39.74,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0183",
+  date: "2026-01-07",
+  categoryId: "dining",
+  amount: 4.66,
+  vendor: "Starbucks Store",
+  note: "Citi: STARBUCKS STORE 21032 HONOLULU HI"
+}, {
+  id: "t2026-0184",
+  date: "2026-01-04",
+  categoryId: "shopping",
+  amount: 93.75,
+  vendor: "Paypal *Walmart Com Walma800-925-6278 Ca",
+  note: "Citi: PAYPAL *WALMART COM WALMA800-925-6278 CA"
+}, {
+  id: "t2026-0185",
+  date: "2026-01-04",
+  categoryId: "subs",
+  amount: 10.46,
+  vendor: "Apple.Com/Bill",
+  note: "Citi: APPLE.COM/BILL 866-712-7753 CA"
+}, {
+  id: "t2026-0186",
+  date: "2026-01-04",
+  categoryId: "dining",
+  amount: 320.16,
+  vendor: "Fook",
+  note: "Citi: FOOK LAM RESTAURANT HONOLULU HI"
+}, {
+  id: "t2026-0187",
+  date: "2026-01-04",
+  categoryId: "groceries",
+  amount: 87.64,
+  vendor: "Costco Whse",
+  note: "Citi: COSTCO WHSE #0120 HONOLULU HI"
+}, {
+  id: "t2026-0188",
+  date: "2026-01-02",
+  categoryId: "groceries",
+  amount: 43.76,
+  vendor: "Safeway",
+  note: "Citi: SAFEWAY #0215 HONOLULU HI"
+}, {
+  id: "t2026-0189",
+  date: "2026-06-23",
+  categoryId: "shopping",
+  amount: 20.86,
+  vendor: "Amazon Mktpl*Rr0A415Y3",
+  note: "Chase ...3154: AMAZON MKTPL*RR0A415Y3"
+}, {
+  id: "t2026-0190",
+  date: "2026-06-11",
+  categoryId: "shopping",
+  amount: 83.74,
+  vendor: "Amazon Mktpl*813Gf0Je3",
+  note: "Chase ...3154: AMAZON MKTPL*813GF0JE3"
+}, {
+  id: "t2026-0191",
+  date: "2026-06-11",
+  categoryId: "shopping",
+  amount: 7.32,
+  vendor: "Amazon Mktpl*Is0779Hp3",
+  note: "Chase ...3154: AMAZON MKTPL*IS0779HP3"
+}, {
+  id: "t2026-0192",
+  date: "2026-06-10",
+  categoryId: "shopping",
+  amount: 20.93,
+  vendor: "Amazon Mktpl*Z87Qb0G63",
+  note: "Chase ...3154: AMAZON MKTPL*Z87QB0G63"
+}, {
+  id: "t2026-0193",
+  date: "2026-06-10",
+  categoryId: "shopping",
+  amount: 130.92,
+  vendor: "Amazon Mktpl*Cs1Sc7Vr3",
+  note: "Chase ...3154: AMAZON MKTPL*CS1SC7VR3"
+}, {
+  id: "t2026-0194",
+  date: "2026-06-07",
+  categoryId: "shopping",
+  amount: 224.38,
+  vendor: "Amazon.Com*Pi50551W3",
+  note: "Chase ...3154: Amazon.com*PI50551W3"
+}, {
+  id: "t2026-0195",
+  date: "2026-06-06",
+  categoryId: "shopping",
+  amount: 2.8,
+  vendor: "Amazon.Com*Zf7Ad1Qc3",
+  note: "Chase ...3154: Amazon.com*ZF7AD1QC3"
+}, {
+  id: "t2026-0196",
+  date: "2026-06-04",
+  categoryId: "shopping",
+  amount: 15.7,
+  vendor: "Amazon Mktpl*567Fc6Tb3",
+  note: "Chase ...3154: AMAZON MKTPL*567FC6TB3"
+}, {
+  id: "t2026-0197",
+  date: "2026-06-04",
+  categoryId: "shopping",
+  amount: 112.45,
+  vendor: "Amazon Mktpl*T023V67E3",
+  note: "Chase ...3154: AMAZON MKTPL*T023V67E3"
+}, {
+  id: "t2026-0198",
+  date: "2026-05-25",
+  categoryId: "shopping",
+  amount: 45.02,
+  vendor: "Amazon Mktpl*Tc3C886V3",
+  note: "Chase ...3154: AMAZON MKTPL*TC3C886V3"
+}, {
+  id: "t2026-0199",
+  date: "2026-05-20",
+  categoryId: "shopping",
+  amount: 41.87,
+  vendor: "Amazon Mktpl*F505R50F3",
+  note: "Chase ...3154: AMAZON MKTPL*F505R50F3"
+}, {
+  id: "t2026-0200",
+  date: "2026-05-20",
+  categoryId: "shopping",
+  amount: 42.04,
+  vendor: "Amazon.Com*Jm5Uu0Qa3",
+  note: "Chase ...3154: Amazon.com*JM5UU0QA3"
+}, {
+  id: "t2026-0201",
+  date: "2026-05-19",
+  categoryId: "shopping",
+  amount: 10.46,
+  vendor: "Amazon Mktpl*4Q3Cb3383",
+  note: "Chase ...3154: AMAZON MKTPL*4Q3CB3383"
+}, {
+  id: "t2026-0202",
+  date: "2026-05-19",
+  categoryId: "shopping",
+  amount: 8.37,
+  vendor: "Amazon Mktpl*Et9Xi1613",
+  note: "Chase ...3154: AMAZON MKTPL*ET9XI1613"
+}, {
+  id: "t2026-0203",
+  date: "2026-05-19",
+  categoryId: "shopping",
+  amount: 14.97,
+  vendor: "Amazon.Com*Yq6Uz2Le3",
+  note: "Chase ...3154: Amazon.com*YQ6UZ2LE3"
+}, {
+  id: "t2026-0204",
+  date: "2026-05-18",
+  categoryId: "shopping",
+  amount: 76.44,
+  vendor: "Amazon.Com*Jr5Sn4Cz3",
+  note: "Chase ...3154: Amazon.com*JR5SN4CZ3"
+}, {
+  id: "t2026-0205",
+  date: "2026-05-13",
+  categoryId: "subs",
+  amount: 4.18,
+  vendor: "Kindle Svcs*Bv0Y51Ql0",
+  note: "Chase ...3154: Kindle Svcs*BV0Y51QL0"
+}, {
+  id: "t2026-0206",
+  date: "2026-05-07",
+  categoryId: "shopping",
+  amount: 20.94,
+  vendor: "Amazon Mktpl*Bv8Yy5X71",
+  note: "Chase ...3154: AMAZON MKTPL*BV8YY5X71"
+}, {
+  id: "t2026-0207",
+  date: "2026-05-02",
+  categoryId: "shopping",
+  amount: 87.96,
+  vendor: "Amazon Mktpl*Bj6Eb48A1",
+  note: "Chase ...3154: AMAZON MKTPL*BJ6EB48A1"
+}, {
+  id: "t2026-0208",
+  date: "2026-04-30",
+  categoryId: "subs",
+  amount: 5.23,
+  vendor: "Kindle Svcs*Bj60M7At1",
+  note: "Chase ...3154: Kindle Svcs*BJ60M7AT1"
+}, {
+  id: "t2026-0209",
+  date: "2026-04-28",
+  categoryId: "shopping",
+  amount: 18.84,
+  vendor: "Amazon Mktpl*Bs1E92Ik1",
+  note: "Chase ...3154: AMAZON MKTPL*BS1E92IK1"
+}, {
+  id: "t2026-0210",
+  date: "2026-04-28",
+  categoryId: "shopping",
+  amount: 29.29,
+  vendor: "Amazon.Com*Bs73T70S0",
+  note: "Chase ...3154: Amazon.com*BS73T70S0"
+}, {
+  id: "t2026-0211",
+  date: "2026-04-28",
+  categoryId: "shopping",
+  amount: 29.32,
+  vendor: "Amazon Mktpl*Bv22M5Cz2",
+  note: "Chase ...3154: AMAZON MKTPL*BV22M5CZ2"
+}, {
+  id: "t2026-0212",
+  date: "2026-04-28",
+  categoryId: "shopping",
+  amount: 105.97,
+  vendor: "Amazon Mktpl*Bs2X90090",
+  note: "Chase ...3154: AMAZON MKTPL*BS2X90090"
+}, {
+  id: "t2026-0213",
+  date: "2026-04-28",
+  categoryId: "shopping",
+  amount: 16.9,
+  vendor: "Amazon Mktpl*Bj06G8Yi2",
+  note: "Chase ...3154: AMAZON MKTPL*BJ06G8YI2"
+}, {
+  id: "t2026-0214",
+  date: "2026-04-26",
+  categoryId: "shopping",
+  amount: 10.46,
+  vendor: "Amazon Mktpl*Bs8268521",
+  note: "Chase ...3154: AMAZON MKTPL*BS8268521"
+}, {
+  id: "t2026-0215",
+  date: "2026-04-25",
+  categoryId: "shopping",
+  amount: 28.26,
+  vendor: "Amazon Mktpl*By7Lm3Ra0",
+  note: "Chase ...3154: AMAZON MKTPL*BY7LM3RA0"
+}, {
+  id: "t2026-0216",
+  date: "2026-04-12",
+  categoryId: "shopping",
+  amount: 56.4,
+  vendor: "Amazon Mktpl*Bc2Ze4Ri0",
+  note: "Chase ...3154: AMAZON MKTPL*BC2ZE4RI0"
+}, {
+  id: "t2026-0217",
+  date: "2026-04-05",
+  categoryId: "shopping",
+  amount: 16.65,
+  vendor: "Amazon Mktpl*Bg9Ug3Uv0",
+  note: "Chase ...3154: AMAZON MKTPL*BG9UG3UV0"
+}, {
+  id: "t2026-0218",
+  date: "2026-03-31",
+  categoryId: "gas",
+  amount: 96.59,
+  vendor: "Texaco 0091507",
+  note: "Chase ...3154: TEXACO 0091507"
+}, {
+  id: "t2026-0219",
+  date: "2026-03-27",
+  categoryId: "groceries",
+  amount: 23,
+  vendor: "Honolulu Intl Airport",
+  note: "Chase ...3154: HONOLULU INTL AIRPORT 016"
+}, {
+  id: "t2026-0220",
+  date: "2026-03-28",
+  categoryId: "dining",
+  amount: 78.22,
+  vendor: "Sing Cheong Yuan Bakery",
+  note: "Chase ...3154: SING CHEONG YUAN BAKERY"
+}, {
+  id: "t2026-0221",
+  date: "2026-03-28",
+  categoryId: "entertainment",
+  amount: 33.32,
+  vendor: "604 Clubhouse",
+  note: "Chase ...3154: 604 CLUBHOUSE"
+}, {
+  id: "t2026-0222",
+  date: "2026-03-27",
+  categoryId: "shopping",
+  amount: 145.55,
+  vendor: "Amazon Prime*Yi5Ow17T3",
+  note: "Chase ...3154: AMAZON PRIME*YI5OW17T3"
+}, {
+  id: "t2026-0223",
+  date: "2026-03-18",
+  categoryId: "shopping",
+  amount: 146.59,
+  vendor: "Amazon Mktpl*B53Hm2Bw2",
+  note: "Chase ...3154: AMAZON MKTPL*B53HM2BW2"
+}, {
+  id: "t2026-0224",
+  date: "2026-03-16",
+  categoryId: "shopping",
+  amount: 27.19,
+  vendor: "Amazon Mktpl*B50Pa1Jg2",
+  note: "Chase ...3154: AMAZON MKTPL*B50PA1JG2"
+}, {
+  id: "t2026-0225",
+  date: "2026-03-08",
+  categoryId: "parking",
+  amount: 0.8,
+  vendor: "Propark-Kekaulike Courty",
+  note: "Chase ...3154: PROPARK-KEKAULIKE COURTY"
+}, {
+  id: "t2026-0226",
+  date: "2026-03-06",
+  categoryId: "dining",
+  amount: 20,
+  vendor: "Kahala Htl &Amp; Rst-Parking",
+  note: "Chase ...3154: KAHALA HTL &amp; RST-PARKING"
+}, {
+  id: "t2026-0227",
+  date: "2026-03-07",
+  categoryId: "shopping",
+  amount: 20.26,
+  vendor: "Amazon.Com*Be75M9Vm0",
+  note: "Chase ...3154: Amazon.com*BE75M9VM0"
+}, {
+  id: "t2026-0228",
+  date: "2026-03-06",
+  categoryId: "shopping",
+  amount: 2.5,
+  vendor: "Nalu Lani Plaza",
+  note: "Chase ...3154: NALU LANI PLAZA"
+}, {
+  id: "t2026-0229",
+  date: "2026-03-01",
+  categoryId: "fees",
+  amount: 150,
+  vendor: "Annual Membership Fee",
+  note: "Chase ...3154: ANNUAL MEMBERSHIP FEE"
+}, {
+  id: "t2026-0230",
+  date: "2026-02-21",
+  categoryId: "shopping",
+  amount: 46.6,
+  vendor: "Amazon Mktpl*1F08X9G13",
+  note: "Chase ...3154: AMAZON MKTPL*1F08X9G13"
+}, {
+  id: "t2026-0231",
+  date: "2026-02-15",
+  categoryId: "shopping",
+  amount: 183.25,
+  vendor: "Amazon Mktpl*Zk3Er68H3",
+  note: "Chase ...3154: AMAZON MKTPL*ZK3ER68H3"
+}, {
+  id: "t2026-0232",
+  date: "2026-02-12",
+  categoryId: "shopping",
+  amount: 24.14,
+  vendor: "Amazon Mktpl*Ml8Hh2T33",
+  note: "Chase ...3154: AMAZON MKTPL*ML8HH2T33"
+}, {
+  id: "t2026-0233",
+  date: "2026-02-10",
+  categoryId: "shopping",
+  amount: 37.7,
+  vendor: "Amazon Mktpl*Pu2Sc1Eo3",
+  note: "Chase ...3154: AMAZON MKTPL*PU2SC1EO3"
+}, {
+  id: "t2026-0234",
+  date: "2026-02-01",
+  categoryId: "shopping",
+  amount: 47.11,
+  vendor: "Amazon Mktpl*1139805S3",
+  note: "Chase ...3154: AMAZON MKTPL*1139805S3"
+}, {
+  id: "t2026-0235",
+  date: "2026-01-21",
+  categoryId: "shopping",
+  amount: 17.8,
+  vendor: "Amazon Mktpl*Ru04O98G3",
+  note: "Chase ...3154: AMAZON MKTPL*RU04O98G3"
+}, {
+  id: "t2026-0236",
+  date: "2026-01-08",
+  categoryId: "shopping",
+  amount: 207.24,
+  vendor: "Amazon Mktpl*3D8Bf7Sw3",
+  note: "Chase ...3154: AMAZON MKTPL*3D8BF7SW3"
+}, {
+  id: "t2026-0237",
+  date: "2026-01-07",
+  categoryId: "shopping",
+  amount: 20.93,
+  vendor: "Amazon Mktpl*L70Xt6Ss3",
+  note: "Chase ...3154: AMAZON MKTPL*L70XT6SS3"
+}, {
+  id: "t2026-0238",
+  date: "2026-01-06",
+  categoryId: "shopping",
+  amount: 57.58,
+  vendor: "Amazon Mktpl*Wb6Gr4N63",
+  note: "Chase ...3154: AMAZON MKTPL*WB6GR4N63"
+}, {
+  id: "t2026-0239",
+  date: "2026-07-07",
+  categoryId: "shopping",
+  amount: 19.17,
+  vendor: "Menehune Water Online",
+  note: "Chase ...1323: MENEHUNE WATER ONLINE"
+}, {
+  id: "t2026-0240",
+  date: "2026-07-06",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0241",
+  date: "2026-06-29",
+  categoryId: "home",
+  amount: 72.25,
+  vendor: "Kilauea Pest Control - Hi",
+  note: "Chase ...1323: KILAUEA PEST CONTROL - HI"
+}, {
+  id: "t2026-0242",
+  date: "2026-06-29",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0243",
+  date: "2026-06-25",
+  categoryId: "subs",
+  amount: 74.99,
+  vendor: "Substack",
+  note: "Chase ...1323: SUBSTACK"
+}, {
+  id: "t2026-0244",
+  date: "2026-06-23",
+  categoryId: "travel",
+  amount: 600,
+  vendor: "United 0164707812813",
+  note: "Chase ...1323: UNITED      0164707812813"
+}, {
+  id: "t2026-0245",
+  date: "2026-06-22",
+  categoryId: "parking",
+  amount: 4.8,
+  vendor: "Metropolis Parking",
+  note: "Chase ...1323: METROPOLIS PARKING"
+}, {
+  id: "t2026-0246",
+  date: "2026-06-22",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0247",
+  date: "2026-06-22",
+  categoryId: "pet",
+  amount: 69.51,
+  vendor: "Mywoof.Com - Woof",
+  note: "Chase ...1323: SP MYWOOF.COM - WOOF"
+}, {
+  id: "t2026-0248",
+  date: "2026-06-21",
+  categoryId: "dining",
+  amount: 25,
+  vendor: "Starbucks 8007827282",
+  note: "Chase ...1323: STARBUCKS 8007827282"
+}, {
+  id: "t2026-0249",
+  date: "2026-06-20",
+  categoryId: "gas",
+  amount: 99.28,
+  vendor: "Texaco 0091507",
+  note: "Chase ...1323: TEXACO 0091507"
+}, {
+  id: "t2026-0250",
+  date: "2026-06-18",
+  categoryId: "fitness",
+  amount: 10,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0251",
+  date: "2026-06-16",
+  categoryId: "dining",
+  amount: 17.32,
+  vendor: "Kozo Sushi - Kahala",
+  note: "Chase ...1323: TST*KOZO SUSHI - KAHALA"
+}, {
+  id: "t2026-0252",
+  date: "2026-06-15",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0253",
+  date: "2026-06-13",
+  categoryId: "travel",
+  amount: 9.99,
+  vendor: "Ua Inflt 0164704990651",
+  note: "Chase ...1323: UA INFLT    0164704990651"
+}, {
+  id: "t2026-0254",
+  date: "2026-06-11",
+  categoryId: "fitness",
+  amount: 10,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0255",
+  date: "2026-06-10",
+  categoryId: "parking",
+  amount: 2.4,
+  vendor: "Metropolis Parking",
+  note: "Chase ...1323: METROPOLIS PARKING"
+}, {
+  id: "t2026-0256",
+  date: "2026-06-08",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0257",
+  date: "2026-06-07",
+  categoryId: "shopping",
+  amount: 130.79,
+  vendor: "Menehune Water Online",
+  note: "Chase ...1323: MENEHUNE WATER ONLINE"
+}, {
+  id: "t2026-0258",
+  date: "2026-06-07",
+  categoryId: "dining",
+  amount: 25,
+  vendor: "Starbucks 8007827282",
+  note: "Chase ...1323: STARBUCKS 8007827282"
+}, {
+  id: "t2026-0259",
+  date: "2026-06-06",
+  categoryId: "groceries",
+  amount: 7.53,
+  vendor: "7-Eleven",
+  note: "Chase ...1323: 7-ELEVEN #54257"
+}, {
+  id: "t2026-0260",
+  date: "2026-06-04",
+  categoryId: "pharmacy",
+  amount: 11.28,
+  vendor: "Longs Drugs",
+  note: "Chase ...1323: LONGS #09185"
+}, {
+  id: "t2026-0261",
+  date: "2026-06-01",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0262",
+  date: "2026-05-28",
+  categoryId: "home",
+  amount: 72.25,
+  vendor: "Kilauea Pest Control - Hi",
+  note: "Chase ...1323: KILAUEA PEST CONTROL - HI"
+}, {
+  id: "t2026-0263",
+  date: "2026-05-29",
+  categoryId: "shopping",
+  amount: 200.31,
+  vendor: "Paypal *Mauijimusa",
+  note: "Chase ...1323: PAYPAL *MAUIJIMUSA"
+}, {
+  id: "t2026-0264",
+  date: "2026-05-25",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0265",
+  date: "2026-05-20",
+  categoryId: "dining",
+  amount: 2.7,
+  vendor: "Musubi Cafe Kahala",
+  note: "Chase ...1323: MUSUBI CAFE KAHALA"
+}, {
+  id: "t2026-0266",
+  date: "2026-05-19",
+  categoryId: "pet",
+  amount: 76.41,
+  vendor: "Mywoof.Com - Woof",
+  note: "Chase ...1323: SP MYWOOF.COM - WOOF"
+}, {
+  id: "t2026-0267",
+  date: "2026-05-18",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0268",
+  date: "2026-05-18",
+  categoryId: "parking",
+  amount: 3.6,
+  vendor: "Metropolis Parking",
+  note: "Chase ...1323: METROPOLIS PARKING"
+}, {
+  id: "t2026-0269",
+  date: "2026-05-16",
+  categoryId: "dining",
+  amount: 147.67,
+  vendor: "Brick Oven Pizza - K",
+  note: "Chase ...1323: TST*BRICK OVEN PIZZA - K"
+}, {
+  id: "t2026-0270",
+  date: "2026-05-15",
+  categoryId: "travel",
+  amount: 12.99,
+  vendor: "Ua Inflt 0164396588914",
+  note: "Chase ...1323: UA INFLT    0164396588914"
+}, {
+  id: "t2026-0271",
+  date: "2026-05-16",
+  categoryId: "shopping",
+  amount: 59.99,
+  vendor: "Get Blissal",
+  note: "Chase ...1323: SP GET BLISSAL"
+}, {
+  id: "t2026-0272",
+  date: "2026-05-11",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0273",
+  date: "2026-05-08",
+  categoryId: "shopping",
+  amount: 19.99,
+  vendor: "Ross Store",
+  note: "Chase ...1323: ROSS STORE #497"
+}, {
+  id: "t2026-0274",
+  date: "2026-05-07",
+  categoryId: "shopping",
+  amount: 70.79,
+  vendor: "Menehune Water Online",
+  note: "Chase ...1323: MENEHUNE WATER ONLINE"
+}, {
+  id: "t2026-0275",
+  date: "2026-05-07",
+  categoryId: "fitness",
+  amount: 10,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0276",
+  date: "2026-05-06",
+  categoryId: "fitness",
+  amount: 10,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0277",
+  date: "2026-05-04",
+  categoryId: "travel",
+  amount: 5.6,
+  vendor: "United 0162399650162",
+  note: "Chase ...1323: UNITED      0162399650162"
+}, {
+  id: "t2026-0278",
+  date: "2026-05-04",
+  categoryId: "travel",
+  amount: 327.1,
+  vendor: "Alaska Air 0272143663370",
+  note: "Chase ...1323: ALASKA AIR  0272143663370"
+}, {
+  id: "t2026-0279",
+  date: "2026-05-04",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0280",
+  date: "2026-05-04",
+  categoryId: "pet",
+  amount: 143.91,
+  vendor: "Mywoof.Com - Woof",
+  note: "Chase ...1323: SP MYWOOF.COM - WOOF"
+}, {
+  id: "t2026-0281",
+  date: "2026-05-02",
+  categoryId: "travel",
+  amount: 13,
+  vendor: "Ua Inflt 0164392821869",
+  note: "Chase ...1323: UA INFLT    0164392821869"
+}, {
+  id: "t2026-0282",
+  date: "2026-04-30",
+  categoryId: "groceries",
+  amount: 54.02,
+  vendor: "Aina Haina Foodland Farms",
+  note: "Chase ...1323: AINA HAINA FOODLAND FARMS"
+}, {
+  id: "t2026-0283",
+  date: "2026-05-02",
+  categoryId: "fitness",
+  amount: 10,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0284",
+  date: "2026-05-02",
+  categoryId: "dining",
+  amount: 107.9,
+  vendor: "Chopstick And Rice",
+  note: "Chase ...1323: CHOPSTICK AND RICE"
+}, {
+  id: "t2026-0285",
+  date: "2026-05-02",
+  categoryId: "shopping",
+  amount: 1,
+  vendor: "Parkwhiz Inc.",
+  note: "Chase ...1323: ParkWhiz  Inc."
+}, {
+  id: "t2026-0286",
+  date: "2026-04-30",
+  categoryId: "shopping",
+  amount: 199,
+  vendor: "Paypal *Iaem",
+  note: "Chase ...1323: PAYPAL *IAEM"
+}, {
+  id: "t2026-0287",
+  date: "2026-04-28",
+  categoryId: "home",
+  amount: 72.25,
+  vendor: "Kilauea Pest Control - Hi",
+  note: "Chase ...1323: KILAUEA PEST CONTROL - HI"
+}, {
+  id: "t2026-0288",
+  date: "2026-04-29",
+  categoryId: "groceries",
+  amount: 3.49,
+  vendor: "Shafter Market",
+  note: "Chase ...1323: SHAFTER MARKET"
+}, {
+  id: "t2026-0289",
+  date: "2026-04-29",
+  categoryId: "fitness",
+  amount: 5,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0290",
+  date: "2026-04-28",
+  categoryId: "pharmacy",
+  amount: 16.35,
+  vendor: "Longs Drugs",
+  note: "Chase ...1323: LONGS #09185"
+}, {
+  id: "t2026-0291",
+  date: "2026-04-28",
+  categoryId: "fitness",
+  amount: 10,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0292",
+  date: "2026-04-27",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0293",
+  date: "2026-04-26",
+  categoryId: "dining",
+  amount: 25,
+  vendor: "Starbucks 8007827282",
+  note: "Chase ...1323: STARBUCKS 8007827282"
+}, {
+  id: "t2026-0294",
+  date: "2026-04-25",
+  categoryId: "shopping",
+  amount: 47,
+  vendor: "Paypal *Collieswith",
+  note: "Chase ...1323: PAYPAL *COLLIESWITH"
+}, {
+  id: "t2026-0295",
+  date: "2026-04-24",
+  categoryId: "dining",
+  amount: 41.83,
+  vendor: "Taqueria La Marea",
+  note: "Chase ...1323: SQ *TAQUERIA LA MAREA"
+}, {
+  id: "t2026-0296",
+  date: "2026-04-21",
+  categoryId: "travel",
+  amount: 25.11,
+  vendor: "Mobile Suica Apple V",
+  note: "Chase ...1323: MOBILE SUICA APPLE V"
+}, {
+  id: "t2026-0297",
+  date: "2026-04-21",
+  categoryId: "travel",
+  amount: 25.11,
+  vendor: "Mobile Suica Apple V",
+  note: "Chase ...1323: MOBILE SUICA APPLE V"
+}, {
+  id: "t2026-0298",
+  date: "2026-04-21",
+  categoryId: "travel",
+  amount: 3.14,
+  vendor: "Mobile Suica Apple V",
+  note: "Chase ...1323: MOBILE SUICA APPLE V"
+}, {
+  id: "t2026-0299",
+  date: "2026-04-14",
+  categoryId: "fitness",
+  amount: 10,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0300",
+  date: "2026-04-12",
+  categoryId: "travel",
+  amount: 12.99,
+  vendor: "Ua Inflt 0164387022941",
+  note: "Chase ...1323: UA INFLT    0164387022941"
+}, {
+  id: "t2026-0301",
+  date: "2026-04-13",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0302",
+  date: "2026-04-10",
+  categoryId: "groceries",
+  amount: 42.3,
+  vendor: "Wholesale Unlimited Expre",
+  note: "Chase ...1323: WHOLESALE UNLIMITED EXPRE"
+}, {
+  id: "t2026-0303",
+  date: "2026-04-08",
+  categoryId: "pet",
+  amount: 78.52,
+  vendor: "Mywoof.Com - Woof",
+  note: "Chase ...1323: SP MYWOOF.COM - WOOF"
+}, {
+  id: "t2026-0304",
+  date: "2026-04-07",
+  categoryId: "shopping",
+  amount: 87.33,
+  vendor: "Menehune Water Online",
+  note: "Chase ...1323: MENEHUNE WATER ONLINE"
+}, {
+  id: "t2026-0305",
+  date: "2026-04-06",
+  categoryId: "pharmacy",
+  amount: 47.1,
+  vendor: "Longs Drugs",
+  note: "Chase ...1323: LONGS #09185"
+}, {
+  id: "t2026-0306",
+  date: "2026-04-05",
+  categoryId: "groceries",
+  amount: 135.04,
+  vendor: "Safeway",
+  note: "Chase ...1323: SAFEWAY #0215"
+}, {
+  id: "t2026-0307",
+  date: "2026-04-05",
+  categoryId: "groceries",
+  amount: 9.31,
+  vendor: "Aina Haina Foodland Farms",
+  note: "Chase ...1323: AINA HAINA FOODLAND FARMS"
+}, {
+  id: "t2026-0308",
+  date: "2026-04-06",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0309",
+  date: "2026-04-04",
+  categoryId: "dining",
+  amount: 72.26,
+  vendor: "Reyn Spooner Kahala Mall",
+  note: "Chase ...1323: REYN SPOONER KAHALA MALL"
+}, {
+  id: "t2026-0310",
+  date: "2026-04-03",
+  categoryId: "groceries",
+  amount: 87.1,
+  vendor: "Target.Com *",
+  note: "Chase ...1323: TARGET.COM  *"
+}, {
+  id: "t2026-0311",
+  date: "2026-04-04",
+  categoryId: "shopping",
+  amount: 96.14,
+  vendor: "Gymshark Inc",
+  note: "Chase ...1323: SP GYMSHARK INC"
+}, {
+  id: "t2026-0312",
+  date: "2026-04-04",
+  categoryId: "shopping",
+  amount: 7.63,
+  vendor: "Carousel Candyland",
+  note: "Chase ...1323: CAROUSEL CANDYLAND"
+}, {
+  id: "t2026-0313",
+  date: "2026-04-02",
+  categoryId: "pharmacy",
+  amount: 10.19,
+  vendor: "Longs Drugs",
+  note: "Chase ...1323: LONGS #09185"
+}, {
+  id: "t2026-0314",
+  date: "2026-04-03",
+  categoryId: "parking",
+  amount: 2.4,
+  vendor: "Metropolis Parking",
+  note: "Chase ...1323: METROPOLIS PARKING"
+}, {
+  id: "t2026-0315",
+  date: "2026-04-04",
+  categoryId: "dining",
+  amount: 34.39,
+  vendor: "W&Amp;M Bar B-* W&Amp;M Bar B-",
+  note: "Chase ...1323: W&amp;M BAR B-* W&amp;M BAR B-"
+}, {
+  id: "t2026-0316",
+  date: "2026-04-01",
+  categoryId: "dining",
+  amount: 25,
+  vendor: "Starbucks 8007827282",
+  note: "Chase ...1323: STARBUCKS 8007827282"
+}, {
+  id: "t2026-0317",
+  date: "2026-03-30",
+  categoryId: "home",
+  amount: 72.25,
+  vendor: "Kilauea Pest Control - Hi",
+  note: "Chase ...1323: KILAUEA PEST CONTROL - HI"
+}, {
+  id: "t2026-0318",
+  date: "2026-03-30",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0319",
+  date: "2026-03-29",
+  categoryId: "dining",
+  amount: 10.99,
+  vendor: "L&Amp;L Hawaiian Bbq.",
+  note: "Chase ...1323: L&amp;L HAWAIIAN BBQ."
+}, {
+  id: "t2026-0320",
+  date: "2026-03-30",
+  categoryId: "dining",
+  amount: 55.76,
+  vendor: "Californiapizzakitchen",
+  note: "Chase ...1323: CALIFORNIAPIZZAKITCHEN"
+}, {
+  id: "t2026-0321",
+  date: "2026-03-27",
+  categoryId: "dining",
+  amount: 4,
+  vendor: "Coca Cola Maui",
+  note: "Chase ...1323: COCA COLA MAUI"
+}, {
+  id: "t2026-0322",
+  date: "2026-03-23",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0323",
+  date: "2026-03-23",
+  categoryId: "dining",
+  amount: 4,
+  vendor: "Hilo",
+  note: "Chase ...1323: SQ *HILO INTERNATIONAL AI"
+}, {
+  id: "t2026-0324",
+  date: "2026-03-20",
+  categoryId: "dining",
+  amount: 58.59,
+  vendor: "Pearl S Korean Bbq Kahal",
+  note: "Chase ...1323: PEARL S KOREAN BBQ  KAHAL"
+}, {
+  id: "t2026-0325",
+  date: "2026-03-19",
+  categoryId: "shopping",
+  amount: 154.97,
+  vendor: "Prana Living Llc",
+  note: "Chase ...1323: prAna Living  LLC"
+}, {
+  id: "t2026-0326",
+  date: "2026-03-17",
+  categoryId: "parking",
+  amount: 3.99,
+  vendor: "Metropolis Parking",
+  note: "Chase ...1323: METROPOLIS PARKING"
+}, {
+  id: "t2026-0327",
+  date: "2026-03-17",
+  categoryId: "dining",
+  amount: 25,
+  vendor: "Starbucks 8007827282",
+  note: "Chase ...1323: STARBUCKS 8007827282"
+}, {
+  id: "t2026-0328",
+  date: "2026-03-16",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0329",
+  date: "2026-03-13",
+  categoryId: "groceries",
+  amount: 100.72,
+  vendor: "Safeway",
+  note: "Chase ...1323: SAFEWAY #0215"
+}, {
+  id: "t2026-0330",
+  date: "2026-03-12",
+  categoryId: "parking",
+  amount: 3.99,
+  vendor: "Metropolis Parking",
+  note: "Chase ...1323: METROPOLIS PARKING"
+}, {
+  id: "t2026-0331",
+  date: "2026-03-13",
+  categoryId: "subs",
+  amount: 78.27,
+  vendor: "Anc* Newspapers.Com",
+  note: "Chase ...1323: ANC* NEWSPAPERS.COM"
+}, {
+  id: "t2026-0332",
+  date: "2026-03-08",
+  categoryId: "groceries",
+  amount: 17.94,
+  vendor: "Safeway",
+  note: "Chase ...1323: SAFEWAY #0215"
+}, {
+  id: "t2026-0333",
+  date: "2026-03-09",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0334",
+  date: "2026-03-07",
+  categoryId: "shopping",
+  amount: 67.33,
+  vendor: "Menehune Water Online",
+  note: "Chase ...1323: MENEHUNE WATER ONLINE"
+}, {
+  id: "t2026-0335",
+  date: "2026-03-05",
+  categoryId: "gas",
+  amount: 3,
+  vendor: "Hawaii Kai Texaco",
+  note: "Chase ...1323: HAWAII KAI TEXACO"
+}, {
+  id: "t2026-0336",
+  date: "2026-03-02",
+  categoryId: "fitness",
+  amount: 239.79,
+  vendor: "Clr*Clubpilates8089005883",
+  note: "Chase ...1323: CLR*ClubPilates8089005883"
+}, {
+  id: "t2026-0337",
+  date: "2026-03-02",
+  categoryId: "home",
+  amount: 72.25,
+  vendor: "Kilauea Pest Control - Hi",
+  note: "Chase ...1323: KILAUEA PEST CONTROL - HI"
+}, {
+  id: "t2026-0338",
+  date: "2026-03-02",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0339",
+  date: "2026-02-28",
+  categoryId: "shopping",
+  amount: 23.55,
+  vendor: "Petco.Com",
+  note: "Chase ...1323: PETCO.COM 6989"
+}, {
+  id: "t2026-0340",
+  date: "2026-02-24",
+  categoryId: "shopping",
+  amount: 20.43,
+  vendor: "Amazon",
+  note: "Chase ...1323: Amazon Digital BR"
+}, {
+  id: "t2026-0341",
+  date: "2026-02-24",
+  categoryId: "shopping",
+  amount: 62.82,
+  vendor: "Mens Warehouse",
+  note: "Chase ...1323: MENS WAREHOUSE #2950"
+}, {
+  id: "t2026-0342",
+  date: "2026-02-23",
+  categoryId: "fitness",
+  amount: 51.2,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0343",
+  date: "2026-02-22",
+  categoryId: "fitness",
+  amount: 16.75,
+  vendor: "Clr*Clubpilates8089005883",
+  note: "Chase ...1323: CLR*ClubPilates8089005883"
+}, {
+  id: "t2026-0344",
+  date: "2026-02-17",
+  categoryId: "health",
+  amount: 100,
+  vendor: "Qhs",
+  note: "Chase ...1323: QHS QMC  HB SELFPAY TC"
+}, {
+  id: "t2026-0345",
+  date: "2026-02-16",
+  categoryId: "fitness",
+  amount: 57.48,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0346",
+  date: "2026-02-14",
+  categoryId: "subs",
+  amount: 20.93,
+  vendor: "Calm.Com Inc.",
+  note: "Chase ...1323: CALM.COM  INC."
+}, {
+  id: "t2026-0347",
+  date: "2026-02-11",
+  categoryId: "personal",
+  amount: 32.31,
+  vendor: "Komo Studi* Komo Studi",
+  note: "Chase ...1323: KOMO STUDI* KOMO STUDI"
+}, {
+  id: "t2026-0348",
+  date: "2026-02-09",
+  categoryId: "fitness",
+  amount: 57.48,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0349",
+  date: "2026-02-07",
+  categoryId: "shopping",
+  amount: 56.28,
+  vendor: "Menehune Water Online",
+  note: "Chase ...1323: MENEHUNE WATER ONLINE"
+}, {
+  id: "t2026-0350",
+  date: "2026-02-02",
+  categoryId: "fitness",
+  amount: 57.48,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0351",
+  date: "2026-02-02",
+  categoryId: "fitness",
+  amount: 239.79,
+  vendor: "Clr*Clubpilates8089005883",
+  note: "Chase ...1323: CLR*ClubPilates8089005883"
+}, {
+  id: "t2026-0352",
+  date: "2026-01-31",
+  categoryId: "shopping",
+  amount: 49,
+  vendor: "Paypal *Helpcourser 74Pkm",
+  note: "Chase ...1323: PAYPAL *HELPCOURSER 74PKM"
+}, {
+  id: "t2026-0353",
+  date: "2026-01-28",
+  categoryId: "travel",
+  amount: 337.99,
+  vendor: "United 0162369315031",
+  note: "Chase ...1323: UNITED      0162369315031"
+}, {
+  id: "t2026-0354",
+  date: "2026-01-28",
+  categoryId: "home",
+  amount: 72.25,
+  vendor: "Kilauea Pest Control - Hi",
+  note: "Chase ...1323: KILAUEA PEST CONTROL - HI"
+}, {
+  id: "t2026-0355",
+  date: "2026-01-26",
+  categoryId: "groceries",
+  amount: 14.94,
+  vendor: "Aina Haina Foodland Farms",
+  note: "Chase ...1323: AINA HAINA FOODLAND FARMS"
+}, {
+  id: "t2026-0356",
+  date: "2026-01-26",
+  categoryId: "fitness",
+  amount: 57.48,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0357",
+  date: "2026-01-25",
+  categoryId: "pet",
+  amount: 64.92,
+  vendor: "Mywoof.Com - Woof",
+  note: "Chase ...1323: SP MYWOOF.COM - WOOF"
+}, {
+  id: "t2026-0358",
+  date: "2026-01-24",
+  categoryId: "fitness",
+  amount: 16.75,
+  vendor: "Clr*Clubpilates8089005883",
+  note: "Chase ...1323: CLR*ClubPilates8089005883"
+}, {
+  id: "t2026-0359",
+  date: "2026-01-19",
+  categoryId: "fitness",
+  amount: 57.48,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0360",
+  date: "2026-01-12",
+  categoryId: "fitness",
+  amount: 57.48,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0361",
+  date: "2026-01-10",
+  categoryId: "fitness",
+  amount: 16.75,
+  vendor: "Clr*Clubpilates8089005883",
+  note: "Chase ...1323: CLR*ClubPilates8089005883"
+}, {
+  id: "t2026-0362",
+  date: "2026-01-09",
+  categoryId: "gas",
+  amount: 67.63,
+  vendor: "Texaco 0099070",
+  note: "Chase ...1323: TEXACO 0099070"
+}, {
+  id: "t2026-0363",
+  date: "2026-01-07",
+  categoryId: "dining",
+  amount: 17.89,
+  vendor: "Jejubing Dessert Caf",
+  note: "Chase ...1323: TST* JEJUBING DESSERT CAF"
+}, {
+  id: "t2026-0364",
+  date: "2026-01-07",
+  categoryId: "shopping",
+  amount: 67.32,
+  vendor: "Menehune Water Online",
+  note: "Chase ...1323: MENEHUNE WATER ONLINE"
+}, {
+  id: "t2026-0365",
+  date: "2026-01-05",
+  categoryId: "fitness",
+  amount: 57.48,
+  vendor: "F45 Hawaii Kai",
+  note: "Chase ...1323: F45 HAWAII KAI"
+}, {
+  id: "t2026-0366",
+  date: "2026-01-04",
+  categoryId: "groceries",
+  amount: 25.63,
+  vendor: "Safeway",
+  note: "Chase ...1323: SAFEWAY #0215"
+}, {
+  id: "t2026-0367",
+  date: "2026-01-04",
+  categoryId: "parking",
+  amount: 4,
+  vendor: "Propark-Chinatown Cultur",
+  note: "Chase ...1323: PROPARK-CHINATOWN CULTUR"
+}, {
+  id: "t2026-0368",
+  date: "2026-01-04",
+  categoryId: "shopping",
+  amount: 169.29,
+  vendor: "Lululemoncom*",
+  note: "Chase ...1323: LULULEMONCOM*"
+}, {
+  id: "t2026-0369",
+  date: "2026-01-03",
+  categoryId: "travel",
+  amount: 32.75,
+  vendor: "Hnl Parks Camping Fee",
+  note: "Chase ...1323: HNL PARKS CAMPING FEE"
+}, {
+  id: "t2026-0370",
+  date: "2026-01-02",
+  categoryId: "fitness",
+  amount: 20.94,
+  vendor: "Clr*Clubpilates8089005883",
+  note: "Chase ...1323: CLR*ClubPilates8089005883"
+}, {
+  id: "t2026-0371",
+  date: "2026-01-02",
+  categoryId: "fitness",
+  amount: 7.33,
+  vendor: "Clr*Clubpilates8089005883",
+  note: "Chase ...1323: CLR*ClubPilates8089005883"
+}, {
+  id: "t2026-0372",
+  date: "2026-01-02",
+  categoryId: "fitness",
+  amount: 16.75,
+  vendor: "Clr*Clubpilates8089005883",
+  note: "Chase ...1323: CLR*ClubPilates8089005883"
+}, {
+  id: "t2026-0373",
+  date: "2026-01-03",
+  categoryId: "shopping",
+  amount: 102.41,
+  vendor: "Lululemoncom*",
+  note: "Chase ...1323: LULULEMONCOM*"
+}, {
+  id: "t2026-0374",
+  date: "2026-01-02",
+  categoryId: "fitness",
+  amount: 214.66,
+  vendor: "Clr*Clubpilates8089005883",
+  note: "Chase ...1323: CLR*ClubPilates8089005883"
+}, {
+  id: "t2026-0375",
+  date: "2026-07-09",
+  categoryId: "utilities",
+  amount: 24.07,
+  vendor: "Board Of Water Supply",
+  note: "FHB Checking: Board of Water Supply"
+}, {
+  id: "t2026-0376",
+  date: "2026-07-08",
+  categoryId: "kids",
+  amount: 50,
+  vendor: "Transfer Hawaii Contrib",
+  note: "FHB Checking: Transfer Hawaii Contrib"
+}, {
+  id: "t2026-0377",
+  date: "2026-07-07",
+  categoryId: "utilities",
+  amount: 31.74,
+  vendor: "Hawaiian Electric",
+  note: "FHB Checking: Hawaiian Electric"
+}, {
+  id: "t2026-0378",
+  date: "2026-07-06",
+  categoryId: "kids",
+  amount: 50,
+  vendor: "Transfer Hawaii Contrib",
+  note: "FHB Checking: Transfer Hawaii Contrib"
+}, {
+  id: "t2026-0379",
+  date: "2026-06-29",
+  categoryId: "mortgage",
+  amount: 1402.55,
+  vendor: "Shellpoint Mortgage Servicing",
+  note: "FHB Checking: Shellpoint Mortgage Servicing"
+}, {
+  id: "t2026-0380",
+  date: "2026-06-26",
+  categoryId: "cash",
+  amount: 1000,
+  vendor: "Withdrwl",
+  note: "FHB Checking: WITHDRWL"
+}, {
+  id: "t2026-0381",
+  date: "2026-06-22",
+  categoryId: "utilities",
+  amount: 15.94,
+  vendor: "Spectrum",
+  note: "FHB Checking: Spectrum"
+}, {
+  id: "t2026-0382",
+  date: "2026-06-16",
+  categoryId: "gifts",
+  amount: 20,
+  vendor: "Transfer Haw Public Radio Donations",
+  note: "FHB Checking: Transfer Haw Public Radio Donations"
+}, {
+  id: "t2026-0383",
+  date: "2026-06-15",
+  categoryId: "mortgage",
+  amount: 1402.55,
+  vendor: "Shellpoint Mortgage Servicing",
+  note: "FHB Checking: Shellpoint Mortgage Servicing"
+}, {
+  id: "t2026-0384",
+  date: "2026-06-11",
+  categoryId: "utilities",
+  amount: 140.14,
+  vendor: "Transfer Hawaii American Payment",
+  note: "FHB Checking: Transfer Hawaii American Payment"
+}, {
+  id: "t2026-0385",
+  date: "2026-06-09",
+  categoryId: "utilities",
+  amount: 24.07,
+  vendor: "Board Of Water Supply",
+  note: "FHB Checking: Board of Water Supply"
+}, {
+  id: "t2026-0386",
+  date: "2026-06-08",
+  categoryId: "kids",
+  amount: 50,
+  vendor: "Transfer Hawaii Contrib",
+  note: "FHB Checking: Transfer Hawaii Contrib"
+}, {
+  id: "t2026-0387",
+  date: "2026-06-08",
+  categoryId: "cash",
+  amount: 200,
+  vendor: "Atm Withdrawal",
+  note: "FHB Checking: ATM Withdrawal"
+}, {
+  id: "t2026-0388",
+  date: "2026-06-08",
+  categoryId: "cash",
+  amount: 200,
+  vendor: "Atm Withdrawal",
+  note: "FHB Checking: ATM Withdrawal"
+}, {
+  id: "t2026-0389",
+  date: "2026-06-04",
+  categoryId: "utilities",
+  amount: 31.77,
+  vendor: "Hawaiian Electric",
+  note: "FHB Checking: Hawaiian Electric"
+}, {
+  id: "t2026-0390",
+  date: "2026-06-01",
+  categoryId: "mortgage",
+  amount: 1402.55,
+  vendor: "Shellpoint Mortgage Servicing",
+  note: "FHB Checking: Shellpoint Mortgage Servicing"
+}, {
+  id: "t2026-0391",
+  date: "2026-06-01",
+  categoryId: "subs",
+  amount: 52.25,
+  vendor: "New York Times",
+  note: "FHB Checking: New York Times"
+}, {
+  id: "t2026-0392",
+  date: "2026-05-20",
+  categoryId: "utilities",
+  amount: 15.94,
+  vendor: "Spectrum",
+  note: "FHB Checking: Spectrum"
+}, {
+  id: "t2026-0393",
+  date: "2026-05-18",
+  categoryId: "gifts",
+  amount: 20,
+  vendor: "Transfer Haw Public Radio Donations",
+  note: "FHB Checking: Transfer Haw Public Radio Donations"
+}, {
+  id: "t2026-0394",
+  date: "2026-05-18",
+  categoryId: "cash",
+  amount: 200,
+  vendor: "Atm Withdrawal",
+  note: "FHB Checking: ATM Withdrawal"
+}, {
+  id: "t2026-0395",
+  date: "2026-05-11",
+  categoryId: "utilities",
+  amount: 20.01,
+  vendor: "Board Of Water Supply",
+  note: "FHB Checking: Board of Water Supply"
+}, {
+  id: "t2026-0396",
+  date: "2026-05-08",
+  categoryId: "kids",
+  amount: 50,
+  vendor: "Transfer Hawaii Contrib",
+  note: "FHB Checking: Transfer Hawaii Contrib"
+}, {
+  id: "t2026-0397",
+  date: "2026-05-06",
+  categoryId: "mortgage",
+  amount: 2405.09,
+  vendor: "Shellpoint Mortgage Servicing",
+  note: "FHB Checking: Shellpoint Mortgage Servicing"
+}, {
+  id: "t2026-0398",
+  date: "2026-05-06",
+  categoryId: "kids",
+  amount: 50,
+  vendor: "Transfer Hawaii Contrib",
+  note: "FHB Checking: Transfer Hawaii Contrib"
+}, {
+  id: "t2026-0399",
+  date: "2026-05-06",
+  categoryId: "utilities",
+  amount: 31.77,
+  vendor: "Hawaiian Electric",
+  note: "FHB Checking: Hawaiian Electric"
+}, {
+  id: "t2026-0400",
+  date: "2026-05-04",
+  categoryId: "cash",
+  amount: 500,
+  vendor: "Atm Withdrawal",
+  note: "FHB Checking: ATM Withdrawal"
+}, {
+  id: "t2026-0401",
+  date: "2026-04-20",
+  categoryId: "utilities",
+  amount: 15.94,
+  vendor: "Spectrum",
+  note: "FHB Checking: Spectrum"
+}, {
+  id: "t2026-0402",
+  date: "2026-04-16",
+  categoryId: "gifts",
+  amount: 20,
+  vendor: "Transfer Haw Public Radio Donations",
+  note: "FHB Checking: Transfer Haw Public Radio Donations"
+}, {
+  id: "t2026-0403",
+  date: "2026-04-16",
+  categoryId: "cash",
+  amount: 500,
+  vendor: "Atm Withdrawal",
+  note: "FHB Checking: ATM Withdrawal"
+}, {
+  id: "t2026-0404",
+  date: "2026-04-10",
+  categoryId: "cash",
+  amount: 500,
+  vendor: "Atm Withdrawal",
+  note: "FHB Checking: ATM Withdrawal"
+}, {
+  id: "t2026-0405",
+  date: "2026-04-10",
+  categoryId: "utilities",
+  amount: 300,
+  vendor: "At&T",
+  note: "FHB Checking: AT&T"
+}, {
+  id: "t2026-0406",
+  date: "2026-04-09",
+  categoryId: "utilities",
+  amount: 24.07,
+  vendor: "Board Of Water Supply",
+  note: "FHB Checking: Board of Water Supply"
+}, {
+  id: "t2026-0407",
+  date: "2026-04-08",
+  categoryId: "kids",
+  amount: 50,
+  vendor: "Transfer Hawaii Contrib",
+  note: "FHB Checking: Transfer Hawaii Contrib"
+}, {
+  id: "t2026-0408",
+  date: "2026-04-07",
+  categoryId: "utilities",
+  amount: 31.77,
+  vendor: "Hawaiian Electric",
+  note: "FHB Checking: Hawaiian Electric"
+}, {
+  id: "t2026-0409",
+  date: "2026-04-06",
+  categoryId: "kids",
+  amount: 50,
+  vendor: "Transfer Hawaii Contrib",
+  note: "FHB Checking: Transfer Hawaii Contrib"
+}, {
+  id: "t2026-0410",
+  date: "2026-04-06",
+  categoryId: "cash",
+  amount: 500,
+  vendor: "Atm Withdrawal",
+  note: "FHB Checking: ATM Withdrawal"
+}, {
+  id: "t2026-0411",
+  date: "2026-04-02",
+  categoryId: "utilities",
+  amount: 141.44,
+  vendor: "Transfer Hawaii American Payment",
+  note: "FHB Checking: Transfer Hawaii American Payment"
+}, {
+  id: "t2026-0412",
+  date: "2026-03-20",
+  categoryId: "utilities",
+  amount: 15.94,
+  vendor: "Spectrum",
+  note: "FHB Checking: Spectrum"
+}, {
+  id: "t2026-0413",
+  date: "2026-03-17",
+  categoryId: "gifts",
+  amount: 20,
+  vendor: "Transfer Haw Public Radio Donations",
+  note: "FHB Checking: Transfer Haw Public Radio Donations"
+}, {
+  id: "t2026-0414",
+  date: "2026-03-10",
+  categoryId: "utilities",
+  amount: 24.07,
+  vendor: "Board Of Water Supply",
+  note: "FHB Checking: Board of Water Supply"
+}, {
+  id: "t2026-0415",
+  date: "2026-03-09",
+  categoryId: "kids",
+  amount: 50,
+  vendor: "Transfer Hawaii Contrib",
+  note: "FHB Checking: Transfer Hawaii Contrib"
+}, {
+  id: "t2026-0416",
+  date: "2026-03-06",
+  categoryId: "kids",
+  amount: 50,
+  vendor: "Transfer Hawaii Contrib",
+  note: "FHB Checking: Transfer Hawaii Contrib"
+}, {
+  id: "t2026-0417",
+  date: "2026-03-06",
+  categoryId: "utilities",
+  amount: 32.45,
+  vendor: "Hawaiian Electric",
+  note: "FHB Checking: Hawaiian Electric"
+}, {
+  id: "t2026-0418",
+  date: "2026-03-03",
+  categoryId: "cash",
+  amount: 200,
+  vendor: "Atm Withdrawal",
+  note: "FHB Checking: ATM Withdrawal"
+}, {
+  id: "t2026-0419",
+  date: "2026-03-02",
+  categoryId: "mortgage",
+  amount: 2506.49,
+  vendor: "Shellpoint Mortgage Servicing",
+  note: "FHB Checking: Shellpoint Mortgage Servicing"
+}, {
+  id: "t2026-0420",
+  date: "2026-02-23",
+  categoryId: "cash",
+  amount: 200,
+  vendor: "Atm Withdrawal",
+  note: "FHB Checking: ATM Withdrawal"
+}, {
+  id: "t2026-0421",
+  date: "2026-02-20",
+  categoryId: "utilities",
+  amount: 15.94,
+  vendor: "Spectrum",
+  note: "FHB Checking: Spectrum"
+}, {
+  id: "t2026-0422",
+  date: "2026-02-18",
+  categoryId: "gifts",
+  amount: 20,
+  vendor: "Transfer Haw Public Radio Donations",
+  note: "FHB Checking: Transfer Haw Public Radio Donations"
+}, {
+  id: "t2026-0423",
+  date: "2026-02-12",
+  categoryId: "cash",
+  amount: 200,
+  vendor: "Atm Withdrawal",
+  note: "FHB Checking: ATM Withdrawal"
+}, {
+  id: "t2026-0424",
+  date: "2026-02-09",
+  categoryId: "kids",
+  amount: 50,
+  vendor: "Transfer Hawaii Contrib",
+  note: "FHB Checking: Transfer Hawaii Contrib"
+}, {
+  id: "t2026-0425",
+  date: "2026-02-09",
+  categoryId: "utilities",
+  amount: 24.07,
+  vendor: "Board Of Water Supply",
+  note: "FHB Checking: Board of Water Supply"
+}, {
+  id: "t2026-0426",
+  date: "2026-02-06",
+  categoryId: "utilities",
+  amount: 104.03,
+  vendor: "Hawaiian Electric",
+  note: "FHB Checking: Hawaiian Electric"
+}, {
+  id: "t2026-0427",
+  date: "2026-02-06",
+  categoryId: "kids",
+  amount: 50,
+  vendor: "Transfer Hawaii Contrib",
+  note: "FHB Checking: Transfer Hawaii Contrib"
+}, {
+  id: "t2026-0428",
+  date: "2026-02-02",
+  categoryId: "mortgage",
+  amount: 2506.49,
+  vendor: "Shellpoint Mortgage Servicing",
+  note: "FHB Checking: Shellpoint Mortgage Servicing"
+}, {
+  id: "t2026-0429",
+  date: "2026-02-02",
+  categoryId: "utilities",
+  amount: 141.44,
+  vendor: "Transfer Hawaii American Payment",
+  note: "FHB Checking: Transfer Hawaii American Payment"
+}, {
+  id: "t2026-0430",
+  date: "2026-01-20",
+  categoryId: "gifts",
+  amount: 20,
+  vendor: "Transfer Haw Public Radio Donations",
+  note: "FHB Checking: Transfer Haw Public Radio Donations"
+}, {
+  id: "t2026-0431",
+  date: "2026-01-20",
+  categoryId: "utilities",
+  amount: 11.78,
+  vendor: "Spectrum",
+  note: "FHB Checking: Spectrum"
+}, {
+  id: "t2026-0432",
+  date: "2026-01-20",
+  categoryId: "cash",
+  amount: 200,
+  vendor: "Atm Withdrawal",
+  note: "FHB Checking: ATM Withdrawal"
+}, {
+  id: "t2026-0433",
+  date: "2026-01-13",
+  categoryId: "cash",
+  amount: 200,
+  vendor: "Atm Withdrawal",
+  note: "FHB Checking: ATM Withdrawal"
+}, {
+  id: "t2026-0434",
+  date: "2026-01-08",
+  categoryId: "subs",
+  amount: 52.25,
+  vendor: "New York Times",
+  note: "FHB Checking: New York Times"
+}, {
+  id: "t2026-0435",
+  date: "2026-01-08",
+  categoryId: "kids",
+  amount: 50,
+  vendor: "Transfer Hawaii Contrib",
+  note: "FHB Checking: Transfer Hawaii Contrib"
+}, {
+  id: "t2026-0436",
+  date: "2026-01-08",
+  categoryId: "utilities",
+  amount: 20.01,
+  vendor: "Board Of Water Supply",
+  note: "FHB Checking: Board of Water Supply"
+}, {
+  id: "t2026-0437",
+  date: "2026-01-06",
+  categoryId: "utilities",
+  amount: 142.15,
+  vendor: "Hawaiian Electric",
+  note: "FHB Checking: Hawaiian Electric"
+}, {
+  id: "t2026-0438",
+  date: "2026-01-06",
+  categoryId: "kids",
+  amount: 50,
+  vendor: "Transfer Hawaii Contrib",
+  note: "FHB Checking: Transfer Hawaii Contrib"
+}, {
+  id: "t2026-0439",
+  date: "2026-01-02",
+  categoryId: "mortgage",
+  amount: 2506.49,
+  vendor: "Shellpoint Mortgage Servicing",
+  note: "FHB Checking: Shellpoint Mortgage Servicing"
+}, {
+  id: "t2026-0440",
+  date: "2026-04-02",
+  categoryId: "vehicle",
+  amount: 828.91,
+  vendor: "Unk Toyota Honolulu P&Honoluluhi",
+  note: "FHB Checking: Unk Toyota Honolulu P&honoluluhi"
+}, {
+  id: "t2026-0441",
+  date: "2026-04-02",
+  categoryId: "dining",
+  amount: 2.25,
+  vendor: "Onolicious Veewabeachhi Via Cantaloupe",
+  note: "FHB Checking: Onolicious Veewabeachhi via Cantaloupe"
+}, {
+  id: "t2026-0442",
+  date: "2026-04-02",
+  categoryId: "dining",
+  amount: 2,
+  vendor: "Onolicious Veewabeachhi Via Cantaloupe",
+  note: "FHB Checking: Onolicious Veewabeachhi via Cantaloupe"
+}, {
+  id: "t2026-0443",
+  date: "2026-04-01",
+  categoryId: "pet",
+  amount: 94.74,
+  vendor: "Petco",
+  note: "FHB Checking: Petco"
+}, {
+  id: "t2026-0444",
+  date: "2026-04-06",
+  categoryId: "shopping",
+  amount: 46.13,
+  vendor: "Unk Fukuya Delicatessehonoluluhi",
+  note: "FHB Checking: Unk Fukuya Delicatessehonoluluhi"
+}, {
+  id: "t2026-0445",
+  date: "2026-04-01",
+  categoryId: "shopping",
+  amount: 12.93,
+  vendor: "Unk Py Brug & A Hhonoluluhi",
+  note: "FHB Checking: Unk Py Brug & a Hhonoluluhi"
+}, {
+  id: "t2026-0446",
+  date: "2026-04-14",
+  categoryId: "shopping",
+  amount: 60,
+  vendor: "Unk Asahi Grill Honoluluhi",
+  note: "FHB Checking: Unk Asahi Grill Honoluluhi"
+}, {
+  id: "t2026-0447",
+  date: "2026-03-19",
+  categoryId: "groceries",
+  amount: 112.73,
+  vendor: "Safeway",
+  note: "FHB Checking: Safeway"
+}, {
+  id: "t2026-0448",
+  date: "2026-03-19",
+  categoryId: "groceries",
+  amount: 50,
+  vendor: "Safeway",
+  note: "FHB Checking: Safeway"
+}, {
+  id: "t2026-0449",
+  date: "2026-03-18",
+  categoryId: "home",
+  amount: 23.64,
+  vendor: "City Mill",
+  note: "FHB Checking: City Mill"
+}, {
+  id: "t2026-0450",
+  date: "2026-03-17",
+  categoryId: "groceries",
+  amount: 24.33,
+  vendor: "Safeway",
+  note: "FHB Checking: Safeway"
+}, {
+  id: "t2026-0451",
+  date: "2026-03-17",
+  categoryId: "dining",
+  amount: 16,
+  vendor: "La Tour Bakehohonoluluhi",
+  note: "FHB Checking: La Tour Bakehohonoluluhi"
+}, {
+  id: "t2026-0452",
+  date: "2026-03-16",
+  categoryId: "pharmacy",
+  amount: 6.21,
+  vendor: "Longs Drugs",
+  note: "FHB Checking: Longs Drugs"
+}, {
+  id: "t2026-0453",
+  date: "2026-03-13",
+  categoryId: "pet",
+  amount: 23.54,
+  vendor: "Petco",
+  note: "FHB Checking: Petco"
+}, {
+  id: "t2026-0454",
+  date: "2026-03-12",
+  categoryId: "groceries",
+  amount: 27.14,
+  vendor: "Times Supermarket",
+  note: "FHB Checking: Times Supermarket"
+}, {
+  id: "t2026-0455",
+  date: "2026-03-10",
+  categoryId: "dining",
+  amount: 37.75,
+  vendor: "Unk Cons Ward F&B Honoluluhi",
+  note: "FHB Checking: Unk Cons Ward F&b Honoluluhi"
+}, {
+  id: "t2026-0456",
+  date: "2026-03-09",
+  categoryId: "pet",
+  amount: 84.29,
+  vendor: "Unk Hawaii Kai Veterinhonoluluhi",
+  note: "FHB Checking: Unk Hawaii Kai Veterinhonoluluhi"
+}, {
+  id: "t2026-0457",
+  date: "2026-03-04",
+  categoryId: "pet",
+  amount: 176.75,
+  vendor: "Unk Hawaii Kai Veterinhonoluluhi",
+  note: "FHB Checking: Unk Hawaii Kai Veterinhonoluluhi"
+}, {
+  id: "t2026-0458",
+  date: "2026-03-04",
+  categoryId: "gas",
+  amount: 71.51,
+  vendor: "Texaco",
+  note: "FHB Checking: Texaco"
+}, {
+  id: "t2026-0459",
+  date: "2026-03-04",
+  categoryId: "groceries",
+  amount: 38.63,
+  vendor: "Safeway",
+  note: "FHB Checking: Safeway"
+}, {
+  id: "t2026-0460",
+  date: "2026-03-03",
+  categoryId: "groceries",
+  amount: 91.01,
+  vendor: "Safeway",
+  note: "FHB Checking: Safeway"
+}, {
+  id: "t2026-0461",
+  date: "2026-03-03",
+  categoryId: "shopping",
+  amount: 0.75,
+  vendor: "Unk Kaimuki Municipal Honoluluhi",
+  note: "FHB Checking: Unk Kaimuki Municipal Honoluluhi"
+}, {
+  id: "t2026-0462",
+  date: "2026-03-02",
+  categoryId: "pet",
+  amount: 43.96,
+  vendor: "Petco",
+  note: "FHB Checking: Petco"
+}, {
+  id: "t2026-0463",
+  date: "2026-03-02",
+  categoryId: "pharmacy",
+  amount: 21.6,
+  vendor: "Longs Drugs",
+  note: "FHB Checking: Longs Drugs"
+}, {
+  id: "t2026-0464",
+  date: "2026-02-23",
+  categoryId: "groceries",
+  amount: 59.32,
+  vendor: "Times Supermarket",
+  note: "FHB Checking: Times Supermarket"
+}, {
+  id: "t2026-0465",
+  date: "2026-02-23",
+  categoryId: "dining",
+  amount: 10.25,
+  vendor: "McDonald's",
+  note: "FHB Checking: McDonald's"
+}, {
+  id: "t2026-0466",
+  date: "2026-02-19",
+  categoryId: "pharmacy",
+  amount: 2.09,
+  vendor: "Longs Drugs",
+  note: "FHB Checking: Longs Drugs"
+}, {
+  id: "t2026-0467",
+  date: "2026-02-18",
+  categoryId: "home",
+  amount: 69.39,
+  vendor: "City Mill",
+  note: "FHB Checking: City Mill"
+}, {
+  id: "t2026-0468",
+  date: "2026-02-18",
+  categoryId: "shopping",
+  amount: 40.78,
+  vendor: "Ross Dress For Less",
+  note: "FHB Checking: Ross Dress for Less"
+}, {
+  id: "t2026-0469",
+  date: "2026-02-18",
+  categoryId: "groceries",
+  amount: 36.07,
+  vendor: "Safeway",
+  note: "FHB Checking: Safeway"
+}, {
+  id: "t2026-0470",
+  date: "2026-02-18",
+  categoryId: "groceries",
+  amount: 24.56,
+  vendor: "Safeway",
+  note: "FHB Checking: Safeway"
+}, {
+  id: "t2026-0471",
+  date: "2026-02-18",
+  categoryId: "gas",
+  amount: 3.45,
+  vendor: "7-Eleven",
+  note: "FHB Checking: 7-Eleven"
+}, {
+  id: "t2026-0472",
+  date: "2026-02-17",
+  categoryId: "pet",
+  amount: 44.35,
+  vendor: "Debit Term Middle St Texa Honolulu Ca Usaseq",
+  note: "FHB Checking: Debit Term Middle St Texa Honolulu Ca Usaseq"
+}, {
+  id: "t2026-0473",
+  date: "2026-02-17",
+  categoryId: "pet",
+  amount: 39.9,
+  vendor: "Debit Term Aloha Honolulu Hi Usaseq",
+  note: "FHB Checking: Debit Term Aloha Honolulu Hi Usaseq"
+}, {
+  id: "t2026-0474",
+  date: "2026-02-17",
+  categoryId: "dining",
+  amount: 35.46,
+  vendor: "Panda Express",
+  note: "FHB Checking: Panda Express"
+}, {
+  id: "t2026-0475",
+  date: "2026-02-13",
+  categoryId: "shopping",
+  amount: 124.35,
+  vendor: "Jillian Saxmanhonoluluhi",
+  note: "FHB Checking: Jillian Saxmanhonoluluhi"
+}, {
+  id: "t2026-0476",
+  date: "2026-02-13",
+  categoryId: "pet",
+  amount: 24.88,
+  vendor: "Debit Term Marukai Honolulu Hi Usaseq",
+  note: "FHB Checking: Debit Term Marukai Honolulu Hi Usaseq"
+}, {
+  id: "t2026-0477",
+  date: "2026-02-13",
+  categoryId: "pharmacy",
+  amount: 22.9,
+  vendor: "Longs Drugs",
+  note: "FHB Checking: Longs Drugs"
+}, {
+  id: "t2026-0478",
+  date: "2026-02-09",
+  categoryId: "gas",
+  amount: 76.42,
+  vendor: "Texaco",
+  note: "FHB Checking: Texaco"
+}, {
+  id: "t2026-0479",
+  date: "2026-02-06",
+  categoryId: "dining",
+  amount: 23.84,
+  vendor: "Liliha Bakery",
+  note: "FHB Checking: Liliha Bakery"
+}, {
+  id: "t2026-0480",
+  date: "2026-02-06",
+  categoryId: "groceries",
+  amount: 5.89,
+  vendor: "Unk Shafter Market Forthi",
+  note: "FHB Checking: Unk Shafter Market Forthi"
+}, {
+  id: "t2026-0481",
+  date: "2026-02-05",
+  categoryId: "shopping",
+  amount: 45.14,
+  vendor: "Ross Dress For Less",
+  note: "FHB Checking: Ross Dress for Less"
+}, {
+  id: "t2026-0482",
+  date: "2026-02-03",
+  categoryId: "shopping",
+  amount: 41.35,
+  vendor: "Unk North Shore Grindshonoluluhi",
+  note: "FHB Checking: Unk North Shore Grindshonoluluhi"
+}, {
+  id: "t2026-0483",
+  date: "2026-01-30",
+  categoryId: "dining",
+  amount: 31.87,
+  vendor: "Chun Wah Kam Noodle Factory",
+  note: "FHB Checking: Chun Wah Kam Noodle Factory"
+}, {
+  id: "t2026-0484",
+  date: "2026-01-21",
+  categoryId: "groceries",
+  amount: 25.3,
+  vendor: "Foodland",
+  note: "FHB Checking: Foodland"
+}, {
+  id: "t2026-0485",
+  date: "2026-01-05",
+  categoryId: "pharmacy",
+  amount: 57.81,
+  vendor: "Longs Drugs",
+  note: "FHB Checking: Longs Drugs"
+}, {
+  id: "t2026-0486",
+  date: "2026-01-03",
+  categoryId: "dining",
+  amount: 12.75,
+  vendor: "McDonald's",
+  note: "Apple Cash: MCDONALD'S F1682"
+}, {
+  id: "t2026-0487",
+  date: "2026-01-08",
+  categoryId: "shopping",
+  amount: 14.05,
+  vendor: "Sees Candy",
+  note: "Apple Cash: SEES CANDY 1631"
+}, {
+  id: "t2026-0488",
+  date: "2026-01-08",
+  categoryId: "health",
+  amount: 32.43,
+  vendor: "Orthosport Hawaii",
+  note: "Apple Cash: SQ *ORTHOSPORT HAWAII"
+}, {
+  id: "t2026-0489",
+  date: "2026-01-08",
+  categoryId: "dining",
+  amount: 8.84,
+  vendor: "Auntie Anne'S #Hi205",
+  note: "Apple Cash: AUNTIE ANNE'S #HI205"
+}, {
+  id: "t2026-0490",
+  date: "2026-01-09",
+  categoryId: "shopping",
+  amount: 25.1,
+  vendor: "Ross Store",
+  note: "Apple Cash: ROSS STORE #378"
+}, {
+  id: "t2026-0491",
+  date: "2026-01-11",
+  categoryId: "pharmacy",
+  amount: 38.7,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0492",
+  date: "2026-01-11",
+  categoryId: "pharmacy",
+  amount: 38.7,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0493",
+  date: "2026-01-13",
+  categoryId: "pharmacy",
+  amount: 10.98,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0494",
+  date: "2026-01-13",
+  categoryId: "pharmacy",
+  amount: 16.08,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09317"
+}, {
+  id: "t2026-0495",
+  date: "2026-01-13",
+  categoryId: "groceries",
+  amount: 24.08,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0496",
+  date: "2026-01-15",
+  categoryId: "gifts",
+  amount: 75,
+  vendor: "Gift Transfer",
+  note: "Apple Cash: gift to +18082926427"
+}, {
+  id: "t2026-0497",
+  date: "2026-01-15",
+  categoryId: "dining",
+  amount: 24.64,
+  vendor: "Kim'S Korean Bar B Q",
+  note: "Apple Cash: KIM'S KOREAN BAR B Q"
+}, {
+  id: "t2026-0498",
+  date: "2026-01-15",
+  categoryId: "groceries",
+  amount: 1.25,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0499",
+  date: "2026-01-16",
+  categoryId: "dining",
+  amount: 27.83,
+  vendor: "E.A.R.L. Kapolei",
+  note: "Apple Cash: SQ *E.A.R.L. KAPOLEI"
+}, {
+  id: "t2026-0500",
+  date: "2026-01-17",
+  categoryId: "groceries",
+  amount: 4.03,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0501",
+  date: "2026-01-19",
+  categoryId: "dining",
+  amount: 9.82,
+  vendor: "7-Eleven",
+  note: "Apple Cash: 7-ELEVEN #54257"
+}, {
+  id: "t2026-0502",
+  date: "2026-01-22",
+  categoryId: "entertainment",
+  amount: 8,
+  vendor: "Hawaii Ft Shafter Bowl",
+  note: "Apple Cash: HAWAII FT SHAFTER BOWL"
+}, {
+  id: "t2026-0503",
+  date: "2026-01-24",
+  categoryId: "dining",
+  amount: 53.07,
+  vendor: "Domino'S",
+  note: "Apple Cash: DOMINO'S 18033"
+}, {
+  id: "t2026-0504",
+  date: "2026-01-24",
+  categoryId: "dining",
+  amount: 12.02,
+  vendor: "McDonald's",
+  note: "Apple Cash: MCDONALD'S F1190"
+}, {
+  id: "t2026-0505",
+  date: "2026-01-25",
+  categoryId: "groceries",
+  amount: 12.56,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0506",
+  date: "2026-01-27",
+  categoryId: "pharmacy",
+  amount: 5.75,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0507",
+  date: "2026-01-29",
+  categoryId: "groceries",
+  amount: 16.35,
+  vendor: "Times Supermkt #02",
+  note: "Apple Cash: TIMES SUPERMKT #02"
+}, {
+  id: "t2026-0508",
+  date: "2026-01-29",
+  categoryId: "dining",
+  amount: 3.76,
+  vendor: "McDonald's",
+  note: "Apple Cash: MCDONALD'S M5235 OF HI"
+}, {
+  id: "t2026-0509",
+  date: "2026-01-29",
+  categoryId: "pharmacy",
+  amount: 10.97,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0510",
+  date: "2026-01-29",
+  categoryId: "pharmacy",
+  amount: 53.29,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0511",
+  date: "2026-02-01",
+  categoryId: "groceries",
+  amount: 28.83,
+  vendor: "Aina Haina Foodland Farms",
+  note: "Apple Cash: AINA HAINA FOODLAND FARMS"
+}, {
+  id: "t2026-0512",
+  date: "2026-02-01",
+  categoryId: "dining",
+  amount: 2.46,
+  vendor: "7-Eleven",
+  note: "Apple Cash: 7-ELEVEN #54275"
+}, {
+  id: "t2026-0513",
+  date: "2026-02-01",
+  categoryId: "pharmacy",
+  amount: 24.39,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0514",
+  date: "2026-02-02",
+  categoryId: "groceries",
+  amount: 14.51,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0515",
+  date: "2026-02-03",
+  categoryId: "gifts",
+  amount: 20,
+  vendor: "Gift Transfer",
+  note: "Apple Cash: gift to +18082926427"
+}, {
+  id: "t2026-0516",
+  date: "2026-02-03",
+  categoryId: "groceries",
+  amount: 16.21,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0517",
+  date: "2026-02-10",
+  categoryId: "dining",
+  amount: 9.41,
+  vendor: "McDonald's",
+  note: "Apple Cash: MCDONALD'S F24790"
+}, {
+  id: "t2026-0518",
+  date: "2026-02-13",
+  categoryId: "groceries",
+  amount: 39.11,
+  vendor: "Wholesale",
+  note: "Apple Cash: WHOLESALE UNLIMITED EX"
+}, {
+  id: "t2026-0519",
+  date: "2026-02-14",
+  categoryId: "groceries",
+  amount: 16.09,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0520",
+  date: "2026-02-16",
+  categoryId: "dining",
+  amount: 17.79,
+  vendor: "Sushiman Hawaii Kai",
+  note: "Apple Cash: SUSHIMAN HAWAII KAI"
+}, {
+  id: "t2026-0521",
+  date: "2026-02-18",
+  categoryId: "gifts",
+  amount: 40,
+  vendor: "Gift Transfer",
+  note: "Apple Cash: gift to +18082926427"
+}, {
+  id: "t2026-0522",
+  date: "2026-02-22",
+  categoryId: "dining",
+  amount: 5.02,
+  vendor: "7-Eleven",
+  note: "Apple Cash: 7-ELEVEN #54257"
+}, {
+  id: "t2026-0523",
+  date: "2026-02-26",
+  categoryId: "pharmacy",
+  amount: 49.99,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0524",
+  date: "2026-02-26",
+  categoryId: "pharmacy",
+  amount: 9.36,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0525",
+  date: "2026-02-27",
+  categoryId: "groceries",
+  amount: 22.39,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0526",
+  date: "2026-03-02",
+  categoryId: "pharmacy",
+  amount: 9.41,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0527",
+  date: "2026-03-02",
+  categoryId: "dining",
+  amount: 14,
+  vendor: "Taco Bell",
+  note: "Apple Cash: TACO BELL 004072"
+}, {
+  id: "t2026-0528",
+  date: "2026-03-04",
+  categoryId: "pharmacy",
+  amount: 9.7,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0529",
+  date: "2026-03-04",
+  categoryId: "pharmacy",
+  amount: 12.87,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0530",
+  date: "2026-03-04",
+  categoryId: "groceries",
+  amount: 8.63,
+  vendor: "Waipio Foodland #31",
+  note: "Apple Cash: WAIPIO FOODLAND #31"
+}, {
+  id: "t2026-0531",
+  date: "2026-03-07",
+  categoryId: "dining",
+  amount: 8.36,
+  vendor: "Liliha Bakery, Ltd",
+  note: "Apple Cash: LILIHA BAKERY, LTD"
+}, {
+  id: "t2026-0532",
+  date: "2026-03-08",
+  categoryId: "dining",
+  amount: 4.82,
+  vendor: "Okayama Kobo Bakery &",
+  note: "Apple Cash: SQ *OKAYAMA KOBO BAKERY &"
+}, {
+  id: "t2026-0533",
+  date: "2026-03-08",
+  categoryId: "dining",
+  amount: 32.46,
+  vendor: "Panda Express",
+  note: "Apple Cash: PANDA EXPRESS #186"
+}, {
+  id: "t2026-0534",
+  date: "2026-03-09",
+  categoryId: "groceries",
+  amount: 71.34,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0535",
+  date: "2026-03-10",
+  categoryId: "pharmacy",
+  amount: 13.61,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09228"
+}, {
+  id: "t2026-0536",
+  date: "2026-03-10",
+  categoryId: "pharmacy",
+  amount: 7.75,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0537",
+  date: "2026-03-11",
+  categoryId: "dining",
+  amount: 8.58,
+  vendor: "McDonald's",
+  note: "Apple Cash: MCDONALD'S F24790"
+}, {
+  id: "t2026-0538",
+  date: "2026-03-15",
+  categoryId: "shopping",
+  amount: 31.39,
+  vendor: "Ross Store",
+  note: "Apple Cash: ROSS STORE #378"
+}, {
+  id: "t2026-0539",
+  date: "2026-03-18",
+  categoryId: "dining",
+  amount: 30.25,
+  vendor: "E.A.R.L. Kakaako",
+  note: "Apple Cash: SQ *E.A.R.L. KAKAAKO"
+}, {
+  id: "t2026-0540",
+  date: "2026-03-19",
+  categoryId: "dining",
+  amount: 9.58,
+  vendor: "Diamond Head Market",
+  note: "Apple Cash: TST*DIAMOND HEAD MARKET"
+}, {
+  id: "t2026-0541",
+  date: "2026-03-19",
+  categoryId: "groceries",
+  amount: 3.49,
+  vendor: "Shafter Market",
+  note: "Apple Cash: SHAFTER MARKET"
+}, {
+  id: "t2026-0542",
+  date: "2026-03-20",
+  categoryId: "dining",
+  amount: 27.21,
+  vendor: "Gulick Delicatessen",
+  note: "Apple Cash: SQ *GULICK DELICATESSEN"
+}, {
+  id: "t2026-0543",
+  date: "2026-03-20",
+  categoryId: "dining",
+  amount: 6.38,
+  vendor: "7-Eleven",
+  note: "Apple Cash: 7-ELEVEN #54257"
+}, {
+  id: "t2026-0544",
+  date: "2026-03-21",
+  categoryId: "dining",
+  amount: 8.89,
+  vendor: "McDonald's",
+  note: "Apple Cash: MCDONALD'S M4944 OF HI"
+}, {
+  id: "t2026-0545",
+  date: "2026-03-21",
+  categoryId: "pharmacy",
+  amount: 36.71,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09220"
+}, {
+  id: "t2026-0546",
+  date: "2026-03-22",
+  categoryId: "groceries",
+  amount: 33.49,
+  vendor: "Kahala Mkt #50",
+  note: "Apple Cash: KAHALA MKT #50"
+}, {
+  id: "t2026-0547",
+  date: "2026-03-22",
+  categoryId: "dining",
+  amount: 10.14,
+  vendor: "McDonald's",
+  note: "Apple Cash: MCDONALD'S F1190"
+}, {
+  id: "t2026-0548",
+  date: "2026-03-23",
+  categoryId: "groceries",
+  amount: 28.69,
+  vendor: "Wholesale Unlimited Expre",
+  note: "Apple Cash: WHOLESALE UNLIMITED EXPRE"
+}, {
+  id: "t2026-0549",
+  date: "2026-03-24",
+  categoryId: "dining",
+  amount: 61.17,
+  vendor: "Short N Sweet Bakery",
+  note: "Apple Cash: TST* SHORT N SWEET BAKERY"
+}, {
+  id: "t2026-0550",
+  date: "2026-03-24",
+  categoryId: "dining",
+  amount: 4.15,
+  vendor: "Short N Sweet Bakery",
+  note: "Apple Cash: TST* SHORT N SWEET BAKERY"
+}, {
+  id: "t2026-0551",
+  date: "2026-03-25",
+  categoryId: "dining",
+  amount: 7.31,
+  vendor: "7-Eleven",
+  note: "Apple Cash: 7-ELEVEN #54275"
+}, {
+  id: "t2026-0552",
+  date: "2026-03-25",
+  categoryId: "entertainment",
+  amount: 3.1,
+  vendor: "Big Island Vendin",
+  note: "Apple Cash: CTLP*BIG ISLAND VENDIN"
+}, {
+  id: "t2026-0553",
+  date: "2026-03-26",
+  categoryId: "dining",
+  amount: 12.55,
+  vendor: "Taco Bell",
+  note: "Apple Cash: TACO BELL 009243"
+}, {
+  id: "t2026-0554",
+  date: "2026-03-29",
+  categoryId: "dining",
+  amount: 20.35,
+  vendor: "Tin Roof Maui",
+  note: "Apple Cash: TST* TIN ROOF MAUI"
+}, {
+  id: "t2026-0555",
+  date: "2026-04-01",
+  categoryId: "groceries",
+  amount: 54.98,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0556",
+  date: "2026-04-02",
+  categoryId: "dining",
+  amount: 12.14,
+  vendor: "McDonald's",
+  note: "Apple Cash: MCDONALD'S F1682"
+}, {
+  id: "t2026-0557",
+  date: "2026-04-02",
+  categoryId: "dining",
+  amount: 56.64,
+  vendor: "02 Zippys Kaimuki",
+  note: "Apple Cash: 02 ZIPPYS KAIMUKI"
+}, {
+  id: "t2026-0558",
+  date: "2026-04-04",
+  categoryId: "dining",
+  amount: 28.14,
+  vendor: "Donut King - Kaimuki",
+  note: "Apple Cash: DONUT KING - KAIMUKI"
+}, {
+  id: "t2026-0559",
+  date: "2026-04-04",
+  categoryId: "dining",
+  amount: 40.27,
+  vendor: "Sushiman Hawaii Kai",
+  note: "Apple Cash: SUSHIMAN HAWAII KAI"
+}, {
+  id: "t2026-0560",
+  date: "2026-04-05",
+  categoryId: "shopping",
+  amount: 75.88,
+  vendor: "Old Navy Us",
+  note: "Apple Cash: OLD NAVY US 6460"
+}, {
+  id: "t2026-0561",
+  date: "2026-04-06",
+  categoryId: "entertainment",
+  amount: 30.52,
+  vendor: "Lash! Hawaii - Kahala",
+  note: "Apple Cash: SPLASH! HAWAII - KAHALA"
+}, {
+  id: "t2026-0562",
+  date: "2026-04-06",
+  categoryId: "shopping",
+  amount: 100.82,
+  vendor: "Skechers Usa #28",
+  note: "Apple Cash: SKECHERS USA #28"
+}, {
+  id: "t2026-0563",
+  date: "2026-04-12",
+  categoryId: "shopping",
+  amount: 30.35,
+  vendor: "Ross Stores",
+  note: "Apple Cash: ROSS STORES #1635"
+}, {
+  id: "t2026-0564",
+  date: "2026-04-13",
+  categoryId: "dining",
+  amount: 2.91,
+  vendor: "Musubi Cafe Kahala",
+  note: "Apple Cash: MUSUBI CAFE KAHALA"
+}, {
+  id: "t2026-0565",
+  date: "2026-04-14",
+  categoryId: "gifts",
+  amount: 50,
+  vendor: "Gift Transfer",
+  note: "Apple Cash: gift to +18082926427"
+}, {
+  id: "t2026-0566",
+  date: "2026-04-15",
+  categoryId: "gas",
+  amount: 3.38,
+  vendor: "Mobil Adelup Service Stat",
+  note: "Apple Cash: MOBIL ADELUP SERVICE STAT"
+}, {
+  id: "t2026-0567",
+  date: "2026-04-16",
+  categoryId: "gifts",
+  amount: 150,
+  vendor: "Gift Transfer",
+  note: "Apple Cash: gift to +18082926427"
+}, {
+  id: "t2026-0568",
+  date: "2026-04-17",
+  categoryId: "dining",
+  amount: 17.05,
+  vendor: "Hilton Guam - Restaurant",
+  note: "Apple Cash: HILTON GUAM - RESTAURANT"
+}, {
+  id: "t2026-0569",
+  date: "2026-04-17",
+  categoryId: "shopping",
+  amount: 28.66,
+  vendor: "Kmart Guam",
+  note: "Apple Cash: KMART GUAM 7705"
+}, {
+  id: "t2026-0570",
+  date: "2026-04-18",
+  categoryId: "gifts",
+  amount: 200,
+  vendor: "Gift Transfer",
+  note: "Apple Cash: gift to +18082926427"
+}, {
+  id: "t2026-0571",
+  date: "2026-04-21",
+  categoryId: "dining",
+  amount: 12.2,
+  vendor: "Great Harvest Bread Co.",
+  note: "Apple Cash: GREAT HARVEST BREAD CO."
+}, {
+  id: "t2026-0572",
+  date: "2026-04-30",
+  categoryId: "pharmacy",
+  amount: 16.31,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0573",
+  date: "2026-04-30",
+  categoryId: "groceries",
+  amount: 12.65,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0574",
+  date: "2026-05-01",
+  categoryId: "entertainment",
+  amount: 7.5,
+  vendor: "Hawaii Ft Shafter Bowl",
+  note: "Apple Cash: HAWAII FT SHAFTER BOWL"
+}, {
+  id: "t2026-0575",
+  date: "2026-05-02",
+  categoryId: "groceries",
+  amount: 23.82,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0576",
+  date: "2026-05-03",
+  categoryId: "dining",
+  amount: 12.65,
+  vendor: "McDonald's",
+  note: "Apple Cash: MCDONALD'S F1190"
+}, {
+  id: "t2026-0577",
+  date: "2026-05-03",
+  categoryId: "shopping",
+  amount: 21.98,
+  vendor: "Pages & Pages Honolul",
+  note: "Apple Cash: SQ *PAGES & PAGES HONOLUL"
+}, {
+  id: "t2026-0578",
+  date: "2026-05-03",
+  categoryId: "shopping",
+  amount: 2.99,
+  vendor: "Pages & Pages Honolul",
+  note: "Apple Cash: SQ *PAGES & PAGES HONOLUL"
+}, {
+  id: "t2026-0579",
+  date: "2026-05-11",
+  categoryId: "shopping",
+  amount: 4.49,
+  vendor: "Kmart Guam",
+  note: "Apple Cash: KMART GUAM 7705"
+}, {
+  id: "t2026-0580",
+  date: "2026-05-12",
+  categoryId: "dining",
+  amount: 26.74,
+  vendor: "Don Don Donki",
+  note: "Apple Cash: DON DON DONKI"
+}, {
+  id: "t2026-0581",
+  date: "2026-05-12",
+  categoryId: "shopping",
+  amount: 3.49,
+  vendor: "Kmart Guam",
+  note: "Apple Cash: KMART GUAM 7705"
+}, {
+  id: "t2026-0582",
+  date: "2026-05-14",
+  categoryId: "dining",
+  amount: 3.85,
+  vendor: "Bon Voyage Guam Westin",
+  note: "Apple Cash: BON VOYAGE GUAM WESTIN"
+}, {
+  id: "t2026-0583",
+  date: "2026-05-16",
+  categoryId: "shopping",
+  amount: 3.98,
+  vendor: "Kmart Guam",
+  note: "Apple Cash: KMART GUAM 7705"
+}, {
+  id: "t2026-0584",
+  date: "2026-05-18",
+  categoryId: "dining",
+  amount: 37.64,
+  vendor: "Crack Seed Store",
+  note: "Apple Cash: CRACK SEED STORE"
+}, {
+  id: "t2026-0585",
+  date: "2026-05-19",
+  categoryId: "groceries",
+  amount: 3.63,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0586",
+  date: "2026-05-20",
+  categoryId: "groceries",
+  amount: 1.58,
+  vendor: "Times Supermarket",
+  note: "Apple Cash: TIMES SUPERMARKET"
+}, {
+  id: "t2026-0587",
+  date: "2026-05-25",
+  categoryId: "groceries",
+  amount: 14.12,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0588",
+  date: "2026-05-26",
+  categoryId: "pharmacy",
+  amount: 63.67,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0589",
+  date: "2026-05-27",
+  categoryId: "groceries",
+  amount: 5.22,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0590",
+  date: "2026-05-27",
+  categoryId: "groceries",
+  amount: 30.64,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0591",
+  date: "2026-05-29",
+  categoryId: "dining",
+  amount: 24.69,
+  vendor: "The Local General Sto",
+  note: "Apple Cash: SQ *THE LOCAL GENERAL STO"
+}, {
+  id: "t2026-0592",
+  date: "2026-06-02",
+  categoryId: "pharmacy",
+  amount: 22.48,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0593",
+  date: "2026-06-02",
+  categoryId: "groceries",
+  amount: 32.25,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0594",
+  date: "2026-06-03",
+  categoryId: "dining",
+  amount: 10.59,
+  vendor: "Baskin",
+  note: "Apple Cash: BASKIN #363455"
+}, {
+  id: "t2026-0595",
+  date: "2026-06-03",
+  categoryId: "dining",
+  amount: 10.76,
+  vendor: "Jack In The Box",
+  note: "Apple Cash: JACK IN THE BOX 8205"
+}, {
+  id: "t2026-0596",
+  date: "2026-06-05",
+  categoryId: "groceries",
+  amount: 17.46,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0597",
+  date: "2026-06-05",
+  categoryId: "dining",
+  amount: 16.8,
+  vendor: "Lanikai Juice - Hawaii K",
+  note: "Apple Cash: LANIKAI JUICE - HAWAII K"
+}, {
+  id: "t2026-0598",
+  date: "2026-06-06",
+  categoryId: "dining",
+  amount: 8.57,
+  vendor: "7-Eleven",
+  note: "Apple Cash: 7-ELEVEN #54275"
+}, {
+  id: "t2026-0599",
+  date: "2026-06-08",
+  categoryId: "groceries",
+  amount: 41.64,
+  vendor: "Wholefds Kmo",
+  note: "Apple Cash: WHOLEFDS KMO 10363"
+}, {
+  id: "t2026-0600",
+  date: "2026-06-08",
+  categoryId: "shopping",
+  amount: 41.83,
+  vendor: "Apple Store #R210",
+  note: "Apple Cash: APPLE STORE #R210"
+}, {
+  id: "t2026-0601",
+  date: "2026-06-09",
+  categoryId: "dining",
+  amount: 7.75,
+  vendor: "Donut King - Kaimuki",
+  note: "Apple Cash: DONUT KING - KAIMUKI"
+}, {
+  id: "t2026-0602",
+  date: "2026-06-11",
+  categoryId: "groceries",
+  amount: 42.05,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0603",
+  date: "2026-06-12",
+  categoryId: "groceries",
+  amount: 46.96,
+  vendor: "Wholesale",
+  note: "Apple Cash: WHOLESALE UNLIMITED EX"
+}, {
+  id: "t2026-0604",
+  date: "2026-06-12",
+  categoryId: "dining",
+  amount: 52.27,
+  vendor: "Don Quijote Kaheka",
+  note: "Apple Cash: DON QUIJOTE KAHEKA"
+}, {
+  id: "t2026-0605",
+  date: "2026-06-13",
+  categoryId: "pharmacy",
+  amount: 1.46,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0606",
+  date: "2026-06-13",
+  categoryId: "pharmacy",
+  amount: 9.28,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0607",
+  date: "2026-06-14",
+  categoryId: "dining",
+  amount: 24.55,
+  vendor: "Taco Bell",
+  note: "Apple Cash: TACO BELL 004072"
+}, {
+  id: "t2026-0608",
+  date: "2026-06-14",
+  categoryId: "shopping",
+  amount: 10.97,
+  vendor: "Pages & Pages Honolul",
+  note: "Apple Cash: SQ *PAGES & PAGES HONOLUL"
+}, {
+  id: "t2026-0609",
+  date: "2026-06-15",
+  categoryId: "groceries",
+  amount: 29.68,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0610",
+  date: "2026-06-15",
+  categoryId: "groceries",
+  amount: 30.04,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0611",
+  date: "2026-06-17",
+  categoryId: "dining",
+  amount: 3.59,
+  vendor: "Don Don Donki",
+  note: "Apple Cash: DON DON DONKI"
+}, {
+  id: "t2026-0612",
+  date: "2026-06-19",
+  categoryId: "dining",
+  amount: 7.02,
+  vendor: "Starbucks Store",
+  note: "Apple Cash: STARBUCKS STORE 20000"
+}, {
+  id: "t2026-0613",
+  date: "2026-06-20",
+  categoryId: "shopping",
+  amount: 36.65,
+  vendor: "Target T-2412",
+  note: "Apple Cash: TARGET T-2412"
+}, {
+  id: "t2026-0614",
+  date: "2026-06-21",
+  categoryId: "dining",
+  amount: 25.11,
+  vendor: "L&L Hawaiian Barbecue",
+  note: "Apple Cash: L&L HAWAIIAN BARBECUE"
+}, {
+  id: "t2026-0615",
+  date: "2026-06-21",
+  categoryId: "groceries",
+  amount: 6.38,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #1117"
+}, {
+  id: "t2026-0616",
+  date: "2026-06-22",
+  categoryId: "groceries",
+  amount: 16.93,
+  vendor: "Kta Super Stores 02",
+  note: "Apple Cash: KTA SUPER STORES 02"
+}, {
+  id: "t2026-0617",
+  date: "2026-06-22",
+  categoryId: "entertainment",
+  amount: 3.6,
+  vendor: "365 Vend 3",
+  note: "Apple Cash: 365 VEND 3"
+}, {
+  id: "t2026-0618",
+  date: "2026-06-23",
+  categoryId: "pharmacy",
+  amount: 4.85,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0619",
+  date: "2026-06-23",
+  categoryId: "groceries",
+  amount: 35.29,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0620",
+  date: "2026-06-23",
+  categoryId: "groceries",
+  amount: 46.96,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0621",
+  date: "2026-06-23",
+  categoryId: "groceries",
+  amount: 44,
+  vendor: "Times Supermkt #02",
+  note: "Apple Cash: TIMES SUPERMKT #02"
+}, {
+  id: "t2026-0622",
+  date: "2026-06-24",
+  categoryId: "dining",
+  amount: 14.61,
+  vendor: "Lanikai Juice - Kahala",
+  note: "Apple Cash: LANIKAI JUICE - KAHALA"
+}, {
+  id: "t2026-0623",
+  date: "2026-06-25",
+  categoryId: "shopping",
+  amount: 21.85,
+  vendor: "Target T-2412",
+  note: "Apple Cash: TARGET T-2412"
+}, {
+  id: "t2026-0624",
+  date: "2026-06-26",
+  categoryId: "shopping",
+  amount: 9.78,
+  vendor: "Abc #71 Hawaii",
+  note: "Apple Cash: ABC #71 HAWAII"
+}, {
+  id: "t2026-0625",
+  date: "2026-06-27",
+  categoryId: "groceries",
+  amount: 11.39,
+  vendor: "Kta Super Stores 02",
+  note: "Apple Cash: KTA SUPER STORES 02"
+}, {
+  id: "t2026-0626",
+  date: "2026-06-27",
+  categoryId: "groceries",
+  amount: 16.05,
+  vendor: "Kta Super Stores 02",
+  note: "Apple Cash: KTA SUPER STORES 02"
+}, {
+  id: "t2026-0627",
+  date: "2026-06-27",
+  categoryId: "gas",
+  amount: 8.3,
+  vendor: "Texaco 0203736",
+  note: "Apple Cash: TEXACO 0203736"
+}, {
+  id: "t2026-0628",
+  date: "2026-06-27",
+  categoryId: "groceries",
+  amount: 97.87,
+  vendor: "Kahala Mkt #50",
+  note: "Apple Cash: KAHALA MKT #50"
+}, {
+  id: "t2026-0629",
+  date: "2026-06-27",
+  categoryId: "entertainment",
+  amount: 3.6,
+  vendor: "365 Vend 3",
+  note: "Apple Cash: 365 VEND 3"
+}, {
+  id: "t2026-0630",
+  date: "2026-06-28",
+  categoryId: "groceries",
+  amount: 65.82,
+  vendor: "Kta Super Stores 02",
+  note: "Apple Cash: KTA SUPER STORES 02"
+}, {
+  id: "t2026-0631",
+  date: "2026-06-28",
+  categoryId: "groceries",
+  amount: 9.16,
+  vendor: "Wholesale Unlimited Expre",
+  note: "Apple Cash: WHOLESALE UNLIMITED EXPRE"
+}, {
+  id: "t2026-0632",
+  date: "2026-06-28",
+  categoryId: "groceries",
+  amount: 18.84,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0633",
+  date: "2026-06-28",
+  categoryId: "vehicle",
+  amount: 7,
+  vendor: "Dmv Duplicate Dr Lic",
+  note: "Apple Cash: DMV DUPLICATE DR LIC"
+}, {
+  id: "t2026-0634",
+  date: "2026-06-29",
+  categoryId: "dining",
+  amount: 42.59,
+  vendor: "Liliha Bakery Ii, Inc.",
+  note: "Apple Cash: LILIHA BAKERY II, INC."
+}, {
+  id: "t2026-0635",
+  date: "2026-06-29",
+  categoryId: "dining",
+  amount: 36.44,
+  vendor: "Sing Cheong Yuan Bakery",
+  note: "Apple Cash: SING CHEONG YUAN BAKERY"
+}, {
+  id: "t2026-0636",
+  date: "2026-06-30",
+  categoryId: "groceries",
+  amount: 16.73,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0637",
+  date: "2026-06-30",
+  categoryId: "groceries",
+  amount: 50.96,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0638",
+  date: "2026-06-30",
+  categoryId: "shopping",
+  amount: 40,
+  vendor: "Lin'S Lei Shop",
+  note: "Apple Cash: LIN'S LEI SHOP"
+}, {
+  id: "t2026-0639",
+  date: "2026-06-30",
+  categoryId: "shopping",
+  amount: 29.29,
+  vendor: "Ross Store",
+  note: "Apple Cash: ROSS STORE #378"
+}, {
+  id: "t2026-0640",
+  date: "2026-06-30",
+  categoryId: "dining",
+  amount: 7.63,
+  vendor: "Paradise Poke Hawaii",
+  note: "Apple Cash: TST*PARADISE POKE HAWAII"
+}, {
+  id: "t2026-0641",
+  date: "2026-07-03",
+  categoryId: "dining",
+  amount: 8,
+  vendor: "Jerky Labs",
+  note: "Apple Cash: SP JERKY LABS"
+}, {
+  id: "t2026-0642",
+  date: "2026-07-03",
+  categoryId: "dining",
+  amount: 45.98,
+  vendor: "Macfarlane July 4Th",
+  note: "Apple Cash: SQ *MACFARLANE JULY 4TH"
+}, {
+  id: "t2026-0643",
+  date: "2026-07-04",
+  categoryId: "groceries",
+  amount: 20.68,
+  vendor: "Wholesale Unlimited Expre",
+  note: "Apple Cash: WHOLESALE UNLIMITED EXPRE"
+}, {
+  id: "t2026-0644",
+  date: "2026-07-06",
+  categoryId: "groceries",
+  amount: 13.6,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0645",
+  date: "2026-07-06",
+  categoryId: "pharmacy",
+  amount: 29.31,
+  vendor: "Longs Drugs",
+  note: "Apple Cash: LONGS #09185"
+}, {
+  id: "t2026-0646",
+  date: "2026-07-07",
+  categoryId: "shopping",
+  amount: 67.99,
+  vendor: "Bold Lead Designs",
+  note: "Apple Cash: SP BOLD LEAD DESIGNS"
+}, {
+  id: "t2026-0647",
+  date: "2026-07-07",
+  categoryId: "dining",
+  amount: 2.82,
+  vendor: "7-Eleven",
+  note: "Apple Cash: 7-ELEVEN #54275"
+}, {
+  id: "t2026-0648",
+  date: "2026-07-07",
+  categoryId: "dining",
+  amount: 12.41,
+  vendor: "Donut King - Kaimuki",
+  note: "Apple Cash: DONUT KING - KAIMUKI"
+}, {
+  id: "t2026-0649",
+  date: "2026-07-07",
+  categoryId: "groceries",
+  amount: 12.84,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0650",
+  date: "2026-07-07",
+  categoryId: "groceries",
+  amount: 84.92,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0651",
+  date: "2026-07-08",
+  categoryId: "shopping",
+  amount: 76.42,
+  vendor: "City Mill",
+  note: "Apple Cash: CITY MILL"
+}, {
+  id: "t2026-0652",
+  date: "2026-07-09",
+  categoryId: "shopping",
+  amount: 0.81,
+  vendor: "0701 /2Hi001 Sees Cand",
+  note: "Apple Cash: 0701 /2HI001 SEES CAND"
+}, {
+  id: "t2026-0653",
+  date: "2026-07-09",
+  categoryId: "shopping",
+  amount: 5.64,
+  vendor: "Ross Store",
+  note: "Apple Cash: ROSS STORE #378"
+}, {
+  id: "t2026-0654",
+  date: "2026-07-09",
+  categoryId: "groceries",
+  amount: 19.54,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0655",
+  date: "2026-07-10",
+  categoryId: "parking",
+  amount: 6.24,
+  vendor: "Diamond Parking",
+  note: "Apple Cash: DIAMOND PARKING"
+}, {
+  id: "t2026-0656",
+  date: "2026-07-10",
+  categoryId: "dining",
+  amount: 11.52,
+  vendor: "Sing Cheong Yuan Bakery",
+  note: "Apple Cash: SING CHEONG YUAN BAKERY"
+}, {
+  id: "t2026-0657",
+  date: "2026-07-10",
+  categoryId: "groceries",
+  amount: 51.83,
+  vendor: "Sun Chong Grocery Ltd",
+  note: "Apple Cash: SUN CHONG GROCERY LTD"
+}, {
+  id: "t2026-0658",
+  date: "2026-07-13",
+  categoryId: "pet",
+  amount: 116.18,
+  vendor: "Petco",
+  note: "Apple Cash: PETCO 1198"
+}, {
+  id: "t2026-0659",
+  date: "2026-07-13",
+  categoryId: "shopping",
+  amount: 2.98,
+  vendor: "Aim Kahala 0136990900",
+  note: "Apple Cash: AIM KAHALA 0136990900"
+}, {
+  id: "t2026-0660",
+  date: "2026-07-14",
+  categoryId: "dining",
+  amount: 114.82,
+  vendor: "Bostons Pizza Hawaii Kai",
+  note: "Apple Cash: BOSTONS PIZZA HAWAII KAI"
+}, {
+  id: "t2026-0661",
+  date: "2026-07-15",
+  categoryId: "groceries",
+  amount: 4.18,
+  vendor: "Safeway",
+  note: "Apple Cash: SAFEWAY #0215"
+}, {
+  id: "t2026-0662",
+  date: "2026-06-05",
+  categoryId: "groceries",
+  amount: -500,
+  vendor: "Grocery Money (gift)",
+  note: "Apple Cash: grocery money received from +18082926427"
+}, {
+  id: "t2026-0663",
+  date: "2026-07-06",
+  categoryId: "groceries",
+  amount: -500,
+  vendor: "Grocery Money (gift)",
+  note: "Apple Cash: grocery money received from +18082926427"
+}, {
+  id: "t-1784231949989",
+  date: "2026-07-16",
+  categoryId: "groceries",
+  amount: 34.4,
+  note: "Longs"
+}, {
+  id: "t-1784231928801",
+  date: "2026-07-16",
+  categoryId: "dining",
+  amount: 10.98,
+  note: "McDonalds"
+}, {
+  id: "t-1784231891535",
+  date: "2026-07-16",
+  categoryId: "subs",
+  amount: 47.12,
+  note: "Anthropic credits"
+}, {
+  id: "t-1784494041546",
+  date: "2026-07-17",
+  categoryId: "groceries",
+  amount: 82.41,
+  note: "Safeway"
+}, {
+  id: "t-1784494103070",
+  date: "2026-07-18",
+  categoryId: "groceries",
+  amount: 14.61,
+  note: "Lanikai Juice"
+}, {
+  id: "t-1784494086065",
+  date: "2026-07-18",
+  categoryId: "groceries",
+  amount: 44.25,
+  note: "Foodland Farms"
+}, {
+  id: "t-1784494063376",
+  date: "2026-07-18",
+  categoryId: "groceries",
+  amount: 180.27,
+  note: "Costco"
+}, {
+  id: "t-1784652043464",
+  date: "2026-07-19",
+  categoryId: "shopping",
+  amount: 16.74,
+  note: "Ross Dress for Less - Pillows"
+}, {
+  id: "t-1784652018520",
+  date: "2026-07-19",
+  categoryId: "dining",
+  amount: 11.52,
+  note: "Diamond Head Market / Grill"
+}, {
+  id: "t-1784652196815",
+  date: "2026-07-20",
+  categoryId: "pharmacy",
+  amount: 83.23,
+  note: "Walmart"
+}, {
+  id: "t-1784517495623",
+  date: "2026-07-20",
+  categoryId: "shopping",
+  amount: 97.19,
+  note: "Yeti"
+}, {
+  id: "t-1784652165695",
+  date: "2026-07-21",
+  categoryId: "utilities",
+  amount: 15.94,
+  note: "Spectrum"
+}, {
+  id: "t-1784667232417",
+  date: "2026-07-13",
+  categoryId: "shopping",
+  amount: 232.35,
+  note: "FHB Checking: Nordstrom"
+}, {
+  id: "t-1784667139494",
+  date: "2026-07-13",
+  categoryId: "aoao",
+  amount: 1378.69,
+  note: "FHB: Kawaihae Crescent AOAO"
+}, {
+  id: "t-1784666974743",
+  date: "2026-07-13",
+  categoryId: "mortgage",
+  amount: 1402.55,
+  note: "FHB Checking: Shellpoint Mortgage Servicing"
+}, {
+  id: "t-1784687105046",
+  date: "2026-07-22",
+  categoryId: "gifts",
+  amount: 40,
+  note: "Venmo to Matt Jepsen for Paulino gift"
+}];
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -2771,7 +7550,66 @@ function Field({
     }
   }, label), children);
 }
-ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(BudgetTracker, null));
+/* ---------- auth gate: only Janet's Google account gets past this screen ---------- */
+function AuthGate() {
+  const [status, setStatus] = useState(() => window.__lastAuthStatus ? window.__lastAuthStatus.status : "checking");
+  const [deniedEmail, setDeniedEmail] = useState(() => window.__lastAuthStatus ? window.__lastAuthStatus.email || null : null);
+  useEffect(() => {
+    function onAuthStatus(e) {
+      const detail = e.detail || {};
+      setStatus(detail.status);
+      if (detail.status === "denied") setDeniedEmail(detail.email || null);
+    }
+    window.addEventListener("auth-status", onAuthStatus);
+    return () => window.removeEventListener("auth-status", onAuthStatus);
+  }, []);
+  if (status === "signed-in") {
+    return /*#__PURE__*/React.createElement(BudgetTracker, null);
+  }
+  const message = status === "denied" ? `${deniedEmail || "That account"} isn't authorized for this budget.` : status === "error" ? "Sign-in failed -- try again." : status === "checking" ? "Checking sign-in status\u2026" : null;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: COLORS.ink,
+      fontFamily: FONT_BODY,
+      minHeight: "100vh",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "18px",
+      padding: "24px",
+      textAlign: "center"
+    }
+  }, /*#__PURE__*/React.createElement(AnchorIcon, {
+    size: 32,
+    color: COLORS.brass
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: FONT_DISPLAY,
+      color: COLORS.paper,
+      fontSize: "22px",
+      fontWeight: 600
+    }
+  }, "Budget Log"), message && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: status === "denied" || status === "error" ? COLORS.coral : COLORS.paperDim,
+      fontSize: "13px",
+      maxWidth: "320px"
+    }
+  }, message), status !== "checking" && /*#__PURE__*/React.createElement("button", {
+    onClick: () => window.startGoogleSignIn && window.startGoogleSignIn(),
+    style: {
+      background: COLORS.brass,
+      color: COLORS.ink,
+      border: "none",
+      borderRadius: "6px",
+      padding: "12px 20px",
+      fontWeight: 600,
+      fontSize: "14px"
+    }
+  }, "Sign in with Google"));
+}
+ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(AuthGate, null));
 </script>
 </body>
 </html>
