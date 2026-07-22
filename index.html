@@ -326,7 +326,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
 import { getFirestore, doc, onSnapshot, setDoc, enableIndexedDbPersistence } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
-import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyANG-kYcZrW86BplwMubf4CkLqiiOWMODE",
@@ -364,8 +364,26 @@ window.addEventListener("auth-status", e => {
 });
 
 window.startGoogleSignIn = function () {
-  signInWithRedirect(auth, provider).catch(err => {
-    console.error("Sign-in redirect failed:", err);
+  // Popup avoids Safari's "Prevent Cross-Site Tracking" breaking the
+  // redirect flow's storage handoff. Only fall back to a full-page
+  // redirect if the environment can't open a popup at all.
+  signInWithPopup(auth, provider).catch(err => {
+    const code = err && err.code;
+    if (code === "auth/popup-blocked" || code === "auth/operation-not-supported-in-this-environment" || code === "auth/cancelled-popup-request") {
+      signInWithRedirect(auth, provider).catch(err2 => {
+        console.error("Redirect fallback failed:", err2);
+        window.dispatchEvent(new CustomEvent("auth-status", {
+          detail: { status: "error", error: String(err2) }
+        }));
+      });
+      return;
+    }
+    if (code === "auth/popup-closed-by-user") {
+      // User backed out of the sign-in window -- just go back to signed-out, no error banner.
+      window.dispatchEvent(new CustomEvent("auth-status", { detail: { status: "signed-out" } }));
+      return;
+    }
+    console.error("Popup sign-in failed:", err);
     window.dispatchEvent(new CustomEvent("auth-status", {
       detail: { status: "error", error: String(err) }
     }));
@@ -376,7 +394,7 @@ window.signOutOfBudgetTracker = function () {
   signOut(auth).catch(err => console.error("Sign-out failed:", err));
 };
 
-// Resolves the account when landing back from the Google redirect flow.
+// Handles the case where a device fell back to full-page redirect (see above).
 getRedirectResult(auth).catch(err => {
   console.error("Redirect result error:", err);
   window.dispatchEvent(new CustomEvent("auth-status", {
