@@ -420,7 +420,7 @@ onAuthStateChanged(auth, user => {
 });
 
 let saveTimer = null;
-window.firestoreSave = function (categories, transactions, onboardingComplete) {
+window.firestoreSave = function (categories, transactions, onboardingComplete, targetHistory) {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     authReady.then(() => {
@@ -428,6 +428,7 @@ window.firestoreSave = function (categories, transactions, onboardingComplete) {
         categories,
         transactions,
         onboardingComplete: !!onboardingComplete,
+        targetHistory: targetHistory || [],
         updatedAt: Date.now()
       }).catch(err => console.error("Firestore save failed:", err));
     });
@@ -482,6 +483,7 @@ const FONT_MONO = "'IBM Plex Mono', 'Courier New', monospace";
 const STORAGE_KEY_TXNS = "budget-tracker-transactions-v1";
 const STORAGE_KEY_CATS = "budget-tracker-categories-v1";
 const STORAGE_KEY_ONBOARDED = "budget-tracker-onboarded-v1";
+const STORAGE_KEY_TARGETHIST = "budget-tracker-target-history-v1";
 
 /* ---------- inline icons (no external icon library needed) ---------- */
 function Icon({
@@ -964,10 +966,13 @@ function computeBudgetSummary(dateRange, transactions, categories) {
       status = "over";
     }
     let suggestion = null;
+    let suggestedTarget = null;
     if (target > 0 && pct > 1.15) {
-      suggestion = `Raise to about ${fmtMoney(Math.ceil(actual / 5) * 5, 0)}/mo to match actual spending`;
+      suggestedTarget = Math.ceil(actual / 5) * 5;
+      suggestion = `Raise to about ${fmtMoney(suggestedTarget, 0)}/mo to match actual spending`;
     } else if (target > 0 && pct < 0.7 && actual > 0) {
-      suggestion = `Lower to about ${fmtMoney(Math.ceil(actual / 5) * 5, 0)}/mo — this much room is going unused`;
+      suggestedTarget = Math.ceil(actual / 5) * 5;
+      suggestion = `Lower to about ${fmtMoney(suggestedTarget, 0)}/mo — this much room is going unused`;
     }
     return {
       category: c,
@@ -977,7 +982,8 @@ function computeBudgetSummary(dateRange, transactions, categories) {
       pct,
       status,
       count: txns.length,
-      suggestion
+      suggestion,
+      suggestedTarget
     };
   }).filter(r => r.actual > 0 || r.target > 0);
   rows.sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
@@ -993,6 +999,79 @@ function computeBudgetSummary(dateRange, transactions, categories) {
     overallStatus,
     outliers
   };
+}
+// Builds a self-contained, printable HTML document from a budget summary — opens
+// cleanly in any browser and can be printed or saved as a PDF from there (Cmd/Ctrl+P).
+function buildSummaryHTML(summary, catById, accountLabel) {
+  const {
+    dateRange,
+    rows,
+    totalActual,
+    totalTarget,
+    overallStatus,
+    outliers
+  } = summary;
+  const statusLabel = {
+    over: "Over budget",
+    under: "Under budget",
+    "on track": "On track",
+    "no targets set": "No targets set for these categories"
+  };
+  const statusColor = {
+    over: "#B23A2F",
+    under: "#2F7A6B",
+    "on track": "#9A6B2A",
+    "no targets set": "#666"
+  };
+  const esc = s => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const catRowsHtml = rows.map(r => `<tr>
+      <td>${esc(r.category.name)} <span class="dim">(${r.count})</span></td>
+      <td class="num">${fmtMoney(r.actual)}</td>
+      <td class="num">${r.target > 0 ? fmtMoney(r.target) : "—"}</td>
+      <td class="status" style="color:${statusColor[r.status]}">${esc(statusLabel[r.status])}</td>
+    </tr>`).join("");
+  const outlierRowsHtml = outliers.map(t => {
+    const cat = catById ? catById[t.categoryId] : null;
+    return `<tr>
+      <td>${esc(t.date)}</td>
+      <td>${esc(cat ? cat.name : t.categoryId)}</td>
+      <td>${esc(t.note || t.vendor || "")}</td>
+      <td class="num">${fmtMoney(t.amount, 2)}</td>
+    </tr>`;
+  }).join("");
+  const offCats = rows.filter(r => r.status !== "on track" && r.suggestion);
+  const recsHtml = offCats.length === 0 ? `<p class="dim">Nothing stands out — targets look reasonable for this period.</p>` : `<ul>${offCats.map(r => `<li><strong>${esc(r.category.name)}:</strong> ${esc(r.suggestion)}</li>`).join("")}</ul>`;
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>Budget Summary ${esc(dateRange[0])} to ${esc(dateRange[1])}</title>
+<style>
+  body { font-family: Georgia, 'Times New Roman', serif; max-width: 720px; margin: 40px auto; color: #16303F; line-height: 1.5; }
+  h1 { font-size: 22px; margin-bottom: 2px; }
+  .meta { color: #666; font-size: 13px; margin-bottom: 20px; }
+  .verdict { font-size: 18px; font-weight: bold; margin-bottom: 4px; }
+  .verdict-line { margin-bottom: 24px; font-size: 14px; }
+  h2 { font-size: 15px; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-top: 28px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  td, th { text-align: left; padding: 5px 6px; border-bottom: 1px solid #e5e5e5; }
+  .num { text-align: right; font-family: 'Courier New', monospace; }
+  .status { text-align: right; font-weight: 600; font-size: 12px; }
+  .dim { color: #888; }
+  ul { font-size: 13px; padding-left: 20px; }
+  li { margin-bottom: 4px; }
+  @media print { body { margin: 0.5in; } }
+</style></head>
+<body>
+  <h1>Budget Summary${accountLabel ? " — " + esc(accountLabel) : ""}</h1>
+  <div class="meta">${esc(dateRange[0])} to ${esc(dateRange[1])} &middot; Generated ${esc(new Date().toLocaleDateString())}</div>
+  <div class="verdict" style="color:${statusColor[overallStatus]}">${esc(statusLabel[overallStatus])}</div>
+  <div class="verdict-line">${fmtMoney(totalActual)} spent vs ${fmtMoney(totalTarget)} budgeted${totalTarget > 0 ? ` (${(totalActual / totalTarget * 100).toFixed(0)}%)` : ""}</div>
+  <h2>By category</h2>
+  <table><tr><th>Category</th><th class="num">Actual</th><th class="num">Target</th><th></th></tr>${catRowsHtml || '<tr><td colspan="4" class="dim">No spend in this period.</td></tr>'}</table>
+  <h2>Largest transactions this period</h2>
+  <table><tr><th>Date</th><th>Category</th><th>Note</th><th class="num">Amount</th></tr>${outlierRowsHtml || '<tr><td colspan="4" class="dim">None.</td></tr>'}</table>
+  <h2>Target adjustments worth considering</h2>
+  ${recsHtml}
+</body></html>`;
 }
 // Stable identity for a statement row across re-renders (used to track which
 // missing/extra validation rows have already been resolved this session).
@@ -1276,6 +1355,7 @@ function CategoryDonut({
 function BudgetTracker() {
   const [categories, setCategories] = useState(() => loadJSON(STORAGE_KEY_CATS, DEFAULT_CATEGORIES));
   const [transactions, setTransactions] = useState(() => loadJSON(STORAGE_KEY_TXNS, DEFAULT_TRANSACTIONS));
+  const [targetHistory, setTargetHistory] = useState(() => loadJSON(STORAGE_KEY_TARGETHIST, []));
   const [onboardingComplete, setOnboardingComplete] = useState(() => {
     const stored = loadJSON(STORAGE_KEY_ONBOARDED, null);
     if (stored !== null) return stored;
@@ -1318,6 +1398,9 @@ function BudgetTracker() {
     saveJSON(STORAGE_KEY_CATS, categories);
   }, [categories]);
   useEffect(() => {
+    saveJSON(STORAGE_KEY_TARGETHIST, targetHistory);
+  }, [targetHistory]);
+  useEffect(() => {
     saveJSON(STORAGE_KEY_ONBOARDED, onboardingComplete);
   }, [onboardingComplete]);
   useEffect(() => {
@@ -1327,10 +1410,10 @@ function BudgetTracker() {
       return;
     }
     if (window.firestoreSave) {
-      window.firestoreSave(categories, transactions, onboardingComplete);
+      window.firestoreSave(categories, transactions, onboardingComplete, targetHistory);
       setSyncStatus("synced");
     }
-  }, [categories, transactions, onboardingComplete]);
+  }, [categories, transactions, onboardingComplete, targetHistory]);
   useEffect(() => {
     function handleData(e) {
       const detail = e.detail || {};
@@ -1338,12 +1421,13 @@ function BudgetTracker() {
       if (detail.categories) setCategories(detail.categories);
       if (detail.transactions) setTransactions(detail.transactions);
       if (typeof detail.onboardingComplete === "boolean") setOnboardingComplete(detail.onboardingComplete);
+      if (detail.targetHistory) setTargetHistory(detail.targetHistory);
       firstSyncDoneRef.current = true;
       setSyncStatus("synced");
     }
     function handleEmpty() {
       firstSyncDoneRef.current = true;
-      if (window.firestoreSave) window.firestoreSave(categories, transactions, onboardingComplete);
+      if (window.firestoreSave) window.firestoreSave(categories, transactions, onboardingComplete, targetHistory);
       setSyncStatus("synced");
     }
     function handleError() {
@@ -1528,6 +1612,37 @@ function BudgetTracker() {
       ...c,
       target: isNaN(v) ? 0 : v
     } : c));
+  }
+  function logTargetChange(categoryId, oldTarget, newTarget) {
+    if (oldTarget === newTarget || isNaN(oldTarget) || isNaN(newTarget)) return;
+    setTargetHistory(prev => [...prev, {
+      id: "th-" + Date.now() + Math.random().toString(36).slice(2, 6),
+      date: todayISO(),
+      categoryId,
+      oldTarget,
+      newTarget
+    }]);
+  }
+  function applyCategoryTargets(updates) {
+    if (!updates || updates.length === 0) return;
+    const byId = {};
+    updates.forEach(u => {
+      byId[u.id] = u.target;
+    });
+    const today = todayISO();
+    const newEntries = categories.filter(c => byId.hasOwnProperty(c.id) && byId[c.id] !== c.target).map(c => ({
+      id: "th-" + Date.now() + Math.random().toString(36).slice(2, 6) + "-" + c.id,
+      date: today,
+      categoryId: c.id,
+      oldTarget: c.target,
+      newTarget: byId[c.id]
+    }));
+    setCategories(categories.map(c => byId.hasOwnProperty(c.id) ? {
+      ...c,
+      target: byId[c.id]
+    } : c));
+    if (newEntries.length > 0) setTargetHistory(prev => [...prev, ...newEntries]);
+    showToast(`Applied ${updates.length} target ${updates.length === 1 ? "adjustment" : "adjustments"}`);
   }
   function exportData() {
     const payload = {
@@ -1871,12 +1986,15 @@ function BudgetTracker() {
     categories: categories,
     categorySpend: categorySpend,
     updateCategoryTarget: updateCategoryTarget,
-    totalMonthlyTarget: totalMonthlyTarget
+    totalMonthlyTarget: totalMonthlyTarget,
+    logTargetChange: logTargetChange
   }), tab === "trends" && /*#__PURE__*/React.createElement(TrendsView, {
     trendData: trendData,
     pieData: pieData,
     PIE_COLORS: PIE_COLORS,
-    otherMonthlyTarget: otherMonthlyTarget
+    otherMonthlyTarget: otherMonthlyTarget,
+    targetHistory: targetHistory,
+    catById: catById
   }), tab === "validate" && /*#__PURE__*/React.createElement(ValidateView, {
     validateInputRef: validateInputRef,
     validationAccount: validationAccount,
@@ -1891,6 +2009,7 @@ function BudgetTracker() {
     onDeleteExtra: deleteExtraRow,
     onUpdateExtra: updateExtraTransaction,
     onConfirmMatch: confirmMatchRow,
+    onApplySuggestions: applyCategoryTargets,
     catById: catById,
     categories: categories,
     transactions: transactions
@@ -2246,9 +2365,11 @@ function CategoriesView({
   categories,
   categorySpend,
   updateCategoryTarget,
-  totalMonthlyTarget
+  totalMonthlyTarget,
+  logTargetChange
 }) {
   const realCats = categories.filter(c => c.id !== "transfer");
+  const editStartRef = useRef({});
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -2346,7 +2467,15 @@ function CategoriesView({
       type: "number",
       value: c.target,
       step: "0.01",
+      onFocus: () => {
+        editStartRef.current[c.id] = c.target;
+      },
       onChange: e => updateCategoryTarget(c.id, e.target.value),
+      onBlur: () => {
+        const start = editStartRef.current[c.id];
+        if (typeof start === "number" && logTargetChange) logTargetChange(c.id, start, c.target);
+        delete editStartRef.current[c.id];
+      },
       style: {
         background: COLORS.panel,
         color: COLORS.paper,
@@ -2517,9 +2646,11 @@ function TrendsView({
   trendData,
   pieData,
   PIE_COLORS,
-  otherMonthlyTarget
+  otherMonthlyTarget,
+  targetHistory,
+  catById
 }) {
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
       gridTemplateColumns: window.innerWidth > 900 ? "3fr 2fr" : "1fr",
@@ -2643,7 +2774,81 @@ function TrendsView({
       fontFamily: FONT_MONO,
       flexShrink: 0
     }
-  }, fmtMoney(d.value, 0))))))));
+  }, fmtMoney(d.value, 0))))))), /*#__PURE__*/React.createElement(TargetHistorySection, {
+    targetHistory: targetHistory,
+    catById: catById
+  })));
+}
+function TargetHistorySection({
+  targetHistory,
+  catById
+}) {
+  const byCategory = {};
+  (targetHistory || []).forEach(h => {
+    if (!byCategory[h.categoryId]) byCategory[h.categoryId] = [];
+    byCategory[h.categoryId].push(h);
+  });
+  const catIds = Object.keys(byCategory).sort((a, b) => {
+    const nameA = catById && catById[a] ? catById[a].name : a;
+    const nameB = catById && catById[b] ? catById[b].name : b;
+    return nameA.localeCompare(nameB);
+  });
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: "28px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: COLORS.paper,
+      fontFamily: FONT_DISPLAY,
+      fontSize: "15px",
+      fontWeight: 600,
+      marginBottom: "4px"
+    }
+  }, "Budget target history"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: COLORS.paperDim,
+      fontSize: "12px",
+      marginBottom: "14px"
+    }
+  }, "Tracks target changes from here on — manual edits and accepted budget-summary adjustments both get logged."), catIds.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
+    text: "No target changes recorded yet. Edit a category target, or accept adjustments from a budget summary, to start building history."
+  }) : /*#__PURE__*/React.createElement("div", null, catIds.map(catId => {
+    const cat = catById ? catById[catId] : null;
+    const entries = [...byCategory[catId]].sort((a, b) => a.date.localeCompare(b.date));
+    return /*#__PURE__*/React.createElement("div", {
+      key: catId,
+      style: {
+        borderBottom: `1px solid ${COLORS.line}`,
+        padding: "10px 0"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: COLORS.paper,
+        fontSize: "13.5px",
+        fontWeight: 600,
+        marginBottom: "6px"
+      }
+    }, cat ? cat.name : catId), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "6px 16px"
+      }
+    }, entries.map((h, i) => /*#__PURE__*/React.createElement("span", {
+      key: i,
+      style: {
+        color: COLORS.paperDim,
+        fontSize: "12px",
+        fontFamily: FONT_MONO,
+        whiteSpace: "nowrap"
+      }
+    }, h.date, ": ", fmtMoney(h.oldTarget, 0), " ", "\u2192", " ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: h.newTarget > h.oldTarget ? COLORS.coral : COLORS.teal
+      }
+    }, fmtMoney(h.newTarget, 0))))));
+  })));
 }
 function ValidateView({
   validateInputRef,
@@ -2659,6 +2864,7 @@ function ValidateView({
   onDeleteExtra,
   onUpdateExtra,
   onConfirmMatch,
+  onApplySuggestions,
   catById,
   categories,
   transactions
@@ -2666,6 +2872,22 @@ function ValidateView({
   const ACCOUNTS = ["Citi", "FHB Checking", "Chase ...3154", "Chase ...1323", "Apple Cash"];
   const [showSummary, setShowSummary] = useState(false);
   const budgetSummary = useMemo(() => validationResult ? computeBudgetSummary(validationResult.dateRange, transactions, categories) : null, [validationResult, transactions, categories]);
+  function exportSummaryDoc() {
+    if (!budgetSummary) return;
+    const html = buildSummaryHTML(budgetSummary, catById, validationAccount);
+    const blob = new Blob([html], {
+      type: "text/html"
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const [start] = budgetSummary.dateRange;
+    a.href = url;
+    a.download = `budget-summary-${start}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       color: COLORS.paper,
@@ -2765,14 +2987,30 @@ function ValidateView({
       fontWeight: 600,
       fontSize: "13px"
     }
-  }, showSummary ? "Hide budget summary" : "Generate budget summary"), showSummary && budgetSummary && /*#__PURE__*/React.createElement(BudgetSummaryPanel, {
+  }, showSummary ? "Hide budget summary" : "Generate budget summary"), showSummary && budgetSummary && /*#__PURE__*/React.createElement("button", {
+    onClick: exportSummaryDoc,
+    style: {
+      background: "none",
+      color: COLORS.paper,
+      border: `1px solid ${COLORS.line}`,
+      borderRadius: "6px",
+      padding: "8px 14px",
+      fontWeight: 600,
+      fontSize: "13px",
+      marginLeft: "8px"
+    }
+  }, /*#__PURE__*/React.createElement(DownloadIcon, {
+    size: 14
+  }), " Export as document"), showSummary && budgetSummary && /*#__PURE__*/React.createElement(BudgetSummaryPanel, {
     summary: budgetSummary,
-    catById: catById
+    catById: catById,
+    onApplySuggestions: onApplySuggestions
   })));
 }
 function BudgetSummaryPanel({
   summary,
-  catById
+  catById,
+  onApplySuggestions
 }) {
   const {
     dateRange,
@@ -2935,13 +3173,27 @@ function BudgetSummaryPanel({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: "8px",
+      gap: "10px",
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
       color: COLORS.paper,
       fontFamily: FONT_DISPLAY,
       fontSize: "13px",
-      fontWeight: 600,
-      marginBottom: "8px"
+      fontWeight: 600
     }
-  }, "Target adjustments worth considering"), offCats.length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, "Target adjustments worth considering"), offCats.length > 0 && onApplySuggestions && /*#__PURE__*/React.createElement(ResolveButton, {
+    variant: "add",
+    onClick: () => onApplySuggestions(offCats.map(r => ({
+      id: r.category.id,
+      target: r.suggestedTarget
+    })))
+  }, "Accept all adjustments")), offCats.length === 0 ? /*#__PURE__*/React.createElement("div", {
     style: {
       color: COLORS.paperDim,
       fontSize: "12px"
