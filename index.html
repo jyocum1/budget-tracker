@@ -1377,9 +1377,10 @@ function BudgetTracker() {
       setTransactions([t, ...transactions]);
       showToast("Logged " + fmtMoney(amt, 2));
       if (resolvingRowRef.current) {
+        const resolvedRow = resolvingRowRef.current;
         setResolvedRows(prev => ({
           ...prev,
-          [rowKey(resolvingRowRef.current)]: "added"
+          [rowKey(resolvedRow)]: "added"
         }));
         resolvingRowRef.current = null;
       }
