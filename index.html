@@ -1439,6 +1439,13 @@ function BudgetTracker() {
       [t.id]: "deleted"
     }));
   }
+  function updateExtraTransaction(id, updates) {
+    setTransactions(prev => prev.map(t => t.id === id ? {
+      ...t,
+      ...updates
+    } : t));
+    showToast("Updated line item");
+  }
   function startEdit(t) {
     setEditingId(t.id);
     setFAmount(String(t.amount));
@@ -1831,7 +1838,10 @@ function BudgetTracker() {
     onMarkTransfer: resolveMissingAsTransfer,
     onEditExtra: startEdit,
     onConfirmExtra: confirmExtraRow,
-    onDeleteExtra: deleteExtraRow
+    onDeleteExtra: deleteExtraRow,
+    onUpdateExtra: updateExtraTransaction,
+    catById: catById,
+    categories: categories
   }))), formOpen && /*#__PURE__*/React.createElement(QuickAddModal, {
     onClose: closeForm,
     onSubmit: submitTransaction,
@@ -2594,7 +2604,10 @@ function ValidateView({
   onMarkTransfer,
   onEditExtra,
   onConfirmExtra,
-  onDeleteExtra
+  onDeleteExtra,
+  onUpdateExtra,
+  catById,
+  categories
 }) {
   const ACCOUNTS = ["Citi", "FHB Checking", "Chase ...3154", "Chase ...1323", "Apple Cash"];
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -2675,7 +2688,10 @@ function ValidateView({
     onMarkTransfer: onMarkTransfer,
     onEditExtra: onEditExtra,
     onConfirmExtra: onConfirmExtra,
-    onDeleteExtra: onDeleteExtra
+    onDeleteExtra: onDeleteExtra,
+    onUpdateExtra: onUpdateExtra,
+    catById: catById,
+    categories: categories
   }));
 }
 function ResolveButton({
@@ -2729,7 +2745,10 @@ function ValidationReport({
   onMarkTransfer,
   onEditExtra,
   onConfirmExtra,
-  onDeleteExtra
+  onDeleteExtra,
+  onUpdateExtra,
+  catById,
+  categories
 }) {
   const {
     matched,
@@ -2745,6 +2764,33 @@ function ValidationReport({
   } = result;
   const clean = missing.length === 0 && extra.length === 0;
   const resolved = resolvedRows || {};
+  const [expandedId, setExpandedId] = useState(null);
+  const [editBuffer, setEditBuffer] = useState(null);
+  function toggleExpand(t) {
+    if (expandedId === t.id) {
+      setExpandedId(null);
+      setEditBuffer(null);
+    } else {
+      setExpandedId(t.id);
+      setEditBuffer({
+        date: t.date,
+        categoryId: t.categoryId,
+        amount: String(t.amount),
+        note: t.note || t.vendor || ""
+      });
+    }
+  }
+  function saveExpanded(t) {
+    const amt = parseFloat(editBuffer.amount);
+    onUpdateExtra(t.id, {
+      date: editBuffer.date,
+      categoryId: editBuffer.categoryId,
+      amount: isNaN(amt) ? t.amount : Math.round(amt * 100) / 100,
+      note: editBuffer.note.trim()
+    });
+    setExpandedId(null);
+    setEditBuffer(null);
+  }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       background: clean ? COLORS.panel : COLORS.panel,
@@ -2862,17 +2908,24 @@ function ValidationReport({
     }
   }, "In the log, not on the statement (", extra.length, ")"), extra.map((t, i) => {
     const state = resolved[t.id];
+    const isOpen = expandedId === t.id;
+    const cat = catById ? catById[t.categoryId] : null;
     return /*#__PURE__*/React.createElement("div", {
       key: i,
+      style: {
+        borderBottom: `1px solid ${COLORS.line}`,
+        opacity: state ? 0.55 : 1
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      onClick: () => !state && toggleExpand(t),
       style: {
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
         gap: "10px",
         padding: "6px 0",
-        borderBottom: `1px solid ${COLORS.line}`,
         fontSize: "12.5px",
-        opacity: state ? 0.55 : 1
+        cursor: state ? "default" : "pointer"
       }
     }, /*#__PURE__*/React.createElement("span", {
       style: {
@@ -2883,7 +2936,7 @@ function ValidationReport({
         textOverflow: "ellipsis",
         whiteSpace: "nowrap"
       }
-    }, t.date, " · ", t.note || t.vendor), /*#__PURE__*/React.createElement("span", {
+    }, t.date, " · ", cat ? cat.name : t.categoryId, " · ", t.note || t.vendor || ""), /*#__PURE__*/React.createElement("span", {
       style: {
         color: COLORS.paper,
         fontFamily: FONT_MONO,
@@ -2894,7 +2947,8 @@ function ValidationReport({
         display: "flex",
         gap: "6px",
         flexShrink: 0
-      }
+      },
+      onClick: e => e.stopPropagation()
     }, state ? /*#__PURE__*/React.createElement("span", {
       style: {
         color: state === "deleted" ? COLORS.coral : COLORS.teal,
@@ -2903,14 +2957,128 @@ function ValidationReport({
       }
     }, state === "deleted" ? "Deleted" : "Confirmed") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ResolveButton, {
       variant: "edit",
-      onClick: () => onEditExtra(t)
-    }, "Recategorize"), /*#__PURE__*/React.createElement(ResolveButton, {
+      onClick: () => toggleExpand(t)
+    }, isOpen ? "Close" : "Details"), /*#__PURE__*/React.createElement(ResolveButton, {
       variant: "ghost",
       onClick: () => onConfirmExtra(t)
     }, "Confirm"), /*#__PURE__*/React.createElement(ResolveButton, {
       variant: "danger",
       onClick: () => onDeleteExtra(t)
-    }, "Delete"))));
+    }, "Delete")))), isOpen && editBuffer && /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "8px",
+        alignItems: "flex-end",
+        background: COLORS.ink,
+        border: `1px solid ${COLORS.line}`,
+        borderRadius: "6px",
+        padding: "10px",
+        marginBottom: "10px"
+      }
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: COLORS.paperDim,
+        fontSize: "10px",
+        marginBottom: "3px",
+        textTransform: "uppercase"
+      }
+    }, "Date"), /*#__PURE__*/React.createElement("input", {
+      type: "date",
+      value: editBuffer.date,
+      onChange: e => setEditBuffer({
+        ...editBuffer,
+        date: e.target.value
+      }),
+      style: {
+        background: COLORS.panel,
+        color: COLORS.paper,
+        border: `1px solid ${COLORS.line}`,
+        borderRadius: "5px",
+        padding: "6px 8px",
+        fontSize: "12.5px"
+      }
+    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: COLORS.paperDim,
+        fontSize: "10px",
+        marginBottom: "3px",
+        textTransform: "uppercase"
+      }
+    }, "Category"), /*#__PURE__*/React.createElement("select", {
+      value: editBuffer.categoryId,
+      onChange: e => setEditBuffer({
+        ...editBuffer,
+        categoryId: e.target.value
+      }),
+      style: {
+        background: COLORS.panel,
+        color: COLORS.paper,
+        border: `1px solid ${COLORS.line}`,
+        borderRadius: "5px",
+        padding: "6px 8px",
+        fontSize: "12.5px"
+      }
+    }, (categories || []).map(c => /*#__PURE__*/React.createElement("option", {
+      key: c.id,
+      value: c.id
+    }, c.name)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: COLORS.paperDim,
+        fontSize: "10px",
+        marginBottom: "3px",
+        textTransform: "uppercase"
+      }
+    }, "Amount"), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      step: "0.01",
+      value: editBuffer.amount,
+      onChange: e => setEditBuffer({
+        ...editBuffer,
+        amount: e.target.value
+      }),
+      style: {
+        background: COLORS.panel,
+        color: COLORS.paper,
+        border: `1px solid ${COLORS.line}`,
+        borderRadius: "5px",
+        padding: "6px 8px",
+        fontSize: "12.5px",
+        width: "90px",
+        fontFamily: FONT_MONO
+      }
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: "1 1 140px",
+        minWidth: "140px"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: COLORS.paperDim,
+        fontSize: "10px",
+        marginBottom: "3px",
+        textTransform: "uppercase"
+      }
+    }, "Note"), /*#__PURE__*/React.createElement("input", {
+      type: "text",
+      value: editBuffer.note,
+      onChange: e => setEditBuffer({
+        ...editBuffer,
+        note: e.target.value
+      }),
+      style: {
+        background: COLORS.panel,
+        color: COLORS.paper,
+        border: `1px solid ${COLORS.line}`,
+        borderRadius: "5px",
+        padding: "6px 8px",
+        fontSize: "12.5px",
+        width: "100%"
+      }
+    })), /*#__PURE__*/React.createElement(ResolveButton, {
+      variant: "add",
+      onClick: () => saveExpanded(t)
+    }, "Save")));
   })), clean && /*#__PURE__*/React.createElement("div", {
     style: {
       color: COLORS.teal,
