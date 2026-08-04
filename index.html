@@ -1264,21 +1264,6 @@ function BudgetTracker() {
     saveJSON(STORAGE_KEY_ONBOARDED, onboardingComplete);
   }, [onboardingComplete]);
   useEffect(() => {
-    // Migration: accounts created before the Transfers category existed
-    // don't have it yet. Add it once, quietly, so validation can mark
-    // credit-card payments without inflating spend totals.
-    if (categories.length > 0 && !categories.some(c => c.id === "transfer")) {
-      setCategories(prev => prev.some(c => c.id === "transfer") ? prev : [...prev, {
-        id: "transfer",
-        name: "Transfers (CC Payments)",
-        target: 0,
-        fixed: true,
-        essential: false,
-        isTransfer: true
-      }]);
-    }
-  }, [categories]);
-  useEffect(() => {
     if (!firstSyncDoneRef.current) return;
     if (skipNextRemoteSaveRef.current) {
       skipNextRemoteSaveRef.current = false;
@@ -3802,7 +3787,66 @@ function AuthGate() {
     }
   }, "Sign in with Google"));
 }
-ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(AuthGate, null));
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = {
+      error: null
+    };
+  }
+  static getDerivedStateFromError(error) {
+    return {
+      error
+    };
+  }
+  componentDidCatch(error, info) {
+    this.setState({
+      error,
+      info
+    });
+  }
+  render() {
+    if (this.state.error) {
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          background: "#10202E",
+          color: "#F2E9DC",
+          fontFamily: "monospace",
+          minHeight: "100vh",
+          padding: "24px",
+          whiteSpace: "pre-wrap",
+          fontSize: "13px",
+          lineHeight: "1.6"
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          color: "#C97A6C",
+          fontWeight: "bold",
+          fontSize: "16px",
+          marginBottom: "12px"
+        }
+      }, "Something broke — here's the error so it can be fixed:"), /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginBottom: "16px"
+        }
+      }, String(this.state.error && this.state.error.stack || this.state.error)), /*#__PURE__*/React.createElement("button", {
+        onClick: () => window.location.reload(),
+        style: {
+          background: "#B98E4A",
+          color: "#10202E",
+          border: "none",
+          borderRadius: "6px",
+          padding: "10px 16px",
+          fontWeight: 600,
+          fontFamily: "sans-serif",
+          cursor: "pointer"
+        }
+      }, "Reload"));
+    }
+    return this.props.children;
+  }
+}
+ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(ErrorBoundary, null, /*#__PURE__*/React.createElement(AuthGate, null)));
 </script>
 </body>
 </html>
