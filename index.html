@@ -810,6 +810,13 @@ const DEFAULT_CATEGORIES = [{
   target: 2.34,
   fixed: true,
   essential: true
+}, {
+  id: "transfer",
+  name: "Transfers (CC Payments)",
+  target: 0,
+  fixed: true,
+  essential: false,
+  isTransfer: true
 }];
 const DEFAULT_TRANSACTIONS = [];
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -929,6 +936,11 @@ function extractStatementRows(rows) {
 }
 function daysBetween(d1, d2) {
   return Math.abs((new Date(d1) - new Date(d2)) / 86400000);
+}
+// Stable identity for a statement row across re-renders (used to track which
+// missing/extra validation rows have already been resolved this session).
+function rowKey(r) {
+  return `${r.date}|${r.description}|${r.amount}`;
 }
 
 // Matches statement rows against the app's stored transactions (same date +/-1 day, same
@@ -1231,8 +1243,10 @@ function BudgetTracker() {
   const validateInputRef = useRef(null);
   const [validationResult, setValidationResult] = useState(null);
   const [validationAccount, setValidationAccount] = useState("Citi");
+  const [resolvedRows, setResolvedRows] = useState({});
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const resolvingRowRef = useRef(null);
   const [fAmount, setFAmount] = useState("");
   const [fCategory, setFCategory] = useState("groceries");
   const [fDate, setFDate] = useState(todayISO());
@@ -1249,6 +1263,21 @@ function BudgetTracker() {
   useEffect(() => {
     saveJSON(STORAGE_KEY_ONBOARDED, onboardingComplete);
   }, [onboardingComplete]);
+  useEffect(() => {
+    // Migration: accounts created before the Transfers category existed
+    // don't have it yet. Add it once, quietly, so validation can mark
+    // credit-card payments without inflating spend totals.
+    if (categories.length > 0 && !categories.some(c => c.id === "transfer")) {
+      setCategories(prev => prev.some(c => c.id === "transfer") ? prev : [...prev, {
+        id: "transfer",
+        name: "Transfers (CC Payments)",
+        target: 0,
+        fixed: true,
+        essential: false,
+        isTransfer: true
+      }]);
+    }
+  }, [categories]);
   useEffect(() => {
     if (!firstSyncDoneRef.current) return;
     if (skipNextRemoteSaveRef.current) {
@@ -1301,14 +1330,14 @@ function BudgetTracker() {
     return m;
   }, [categories]);
   const totalMonthlyTarget = useMemo(() => categories.reduce((s, c) => s + c.target, 0), [categories]);
-  const otherMonthlyTarget = useMemo(() => categories.filter(c => c.id !== "mortgage" && c.id !== "aoao").reduce((s, c) => s + c.target, 0), [categories]);
+  const otherMonthlyTarget = useMemo(() => categories.filter(c => c.id !== "mortgage" && c.id !== "aoao" && c.id !== "transfer").reduce((s, c) => s + c.target, 0), [categories]);
   const {
     year,
     month
   } = viewMonth;
   const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
   const monthTxns = useMemo(() => transactions.filter(t => t.date.startsWith(monthKey)), [transactions, monthKey]);
-  const monthTotal = useMemo(() => monthTxns.filter(t => t.categoryId !== "mortgage" && t.categoryId !== "aoao").reduce((s, t) => s + t.amount, 0), [monthTxns]);
+  const monthTotal = useMemo(() => monthTxns.filter(t => t.categoryId !== "mortgage" && t.categoryId !== "aoao" && t.categoryId !== "transfer").reduce((s, t) => s + t.amount, 0), [monthTxns]);
   const now = new Date();
   const isCurrentMonth = year === now.getFullYear() && month === now.getMonth();
   const dim = daysInMonth(year, month);
@@ -1362,8 +1391,53 @@ function BudgetTracker() {
       };
       setTransactions([t, ...transactions]);
       showToast("Logged " + fmtMoney(amt, 2));
+      if (resolvingRowRef.current) {
+        setResolvedRows(prev => ({
+          ...prev,
+          [rowKey(resolvingRowRef.current)]: "added"
+        }));
+        resolvingRowRef.current = null;
+      }
     }
     closeForm();
+  }
+  function openResolveAddForm(row) {
+    resolvingRowRef.current = row;
+    setEditingId(null);
+    setFAmount(String(row.amount));
+    setFCategory("groceries");
+    setFDate(row.date);
+    setFNote(`${validationAccount}: ${row.description}`);
+    setFormOpen(true);
+  }
+  function resolveMissingAsTransfer(row) {
+    const t = {
+      id: "t-" + Date.now(),
+      date: row.date,
+      categoryId: "transfer",
+      amount: Math.round(row.amount * 100) / 100,
+      vendor: row.description,
+      note: `${validationAccount}: ${row.description} (credit card payment)`
+    };
+    setTransactions(prev => [t, ...prev]);
+    setResolvedRows(prev => ({
+      ...prev,
+      [rowKey(row)]: "transfer"
+    }));
+    showToast("Marked as transfer — " + fmtMoney(row.amount, 2));
+  }
+  function confirmExtraRow(t) {
+    setResolvedRows(prev => ({
+      ...prev,
+      [t.id]: "confirmed"
+    }));
+  }
+  function deleteExtraRow(t) {
+    deleteTransaction(t.id);
+    setResolvedRows(prev => ({
+      ...prev,
+      [t.id]: "deleted"
+    }));
   }
   function startEdit(t) {
     setEditingId(t.id);
@@ -1386,6 +1460,7 @@ function BudgetTracker() {
     setEditingId(null);
     setFAmount("");
     setFNote("");
+    resolvingRowRef.current = null;
   }
   function deleteTransaction(id) {
     setTransactions(transactions.filter(t => t.id !== id));
@@ -1465,6 +1540,7 @@ function BudgetTracker() {
           ...result,
           accountLabel
         });
+        setResolvedRows({});
         showToast(`Checked ${result.rowCount} statement rows against the log`);
       } catch (err) {
         showToast("Couldn't read that file — is it a CSV?");
@@ -1484,7 +1560,7 @@ function BudgetTracker() {
   const trendData = useMemo(() => {
     const byMonth = {};
     transactions.forEach(t => {
-      if (t.categoryId === "mortgage" || t.categoryId === "aoao") return;
+      if (t.categoryId === "mortgage" || t.categoryId === "aoao" || t.categoryId === "transfer") return;
       const key = t.date.slice(0, 7);
       byMonth[key] = (byMonth[key] || 0) + t.amount;
     });
@@ -1499,7 +1575,7 @@ function BudgetTracker() {
   }, [transactions, otherMonthlyTarget]);
   const PIE_COLORS = [COLORS.teal, COLORS.brass, COLORS.coral, "#8FA6B0", "#B98E4A", "#4A8C82", "#C97A6C", "#5A7A8C"];
   const pieData = useMemo(() => {
-    return categories.filter(c => c.id !== "mortgage" && c.id !== "aoao" && categorySpend[c.id] > 0).map(c => ({
+    return categories.filter(c => c.id !== "mortgage" && c.id !== "aoao" && c.id !== "transfer" && categorySpend[c.id] > 0).map(c => ({
       name: c.name,
       value: Math.round(categorySpend[c.id] * 100) / 100
     })).sort((a, b) => b.value - a.value).slice(0, 8);
@@ -1749,7 +1825,13 @@ function BudgetTracker() {
     validationAccount: validationAccount,
     setValidationAccount: setValidationAccount,
     validationResult: validationResult,
-    onFileChosen: file => validateStatementFile(file, validationAccount)
+    onFileChosen: file => validateStatementFile(file, validationAccount),
+    resolvedRows: resolvedRows,
+    onAddToLog: openResolveAddForm,
+    onMarkTransfer: resolveMissingAsTransfer,
+    onEditExtra: startEdit,
+    onConfirmExtra: confirmExtraRow,
+    onDeleteExtra: deleteExtraRow
   }))), formOpen && /*#__PURE__*/React.createElement(QuickAddModal, {
     onClose: closeForm,
     onSubmit: submitTransaction,
@@ -2104,7 +2186,7 @@ function CategoriesView({
   updateCategoryTarget,
   totalMonthlyTarget
 }) {
-  const realCats = categories;
+  const realCats = categories.filter(c => c.id !== "transfer");
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -2506,7 +2588,13 @@ function ValidateView({
   validationAccount,
   setValidationAccount,
   validationResult,
-  onFileChosen
+  onFileChosen,
+  resolvedRows,
+  onAddToLog,
+  onMarkTransfer,
+  onEditExtra,
+  onConfirmExtra,
+  onDeleteExtra
 }) {
   const ACCOUNTS = ["Citi", "FHB Checking", "Chase ...3154", "Chase ...1323", "Apple Cash"];
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -2581,11 +2669,67 @@ function ValidateView({
   })), !validationResult ? /*#__PURE__*/React.createElement(EmptyState, {
     text: "No statement checked yet. Choose a CSV above to run a validation pass."
   }) : /*#__PURE__*/React.createElement(ValidationReport, {
-    result: validationResult
+    result: validationResult,
+    resolvedRows: resolvedRows,
+    onAddToLog: onAddToLog,
+    onMarkTransfer: onMarkTransfer,
+    onEditExtra: onEditExtra,
+    onConfirmExtra: onConfirmExtra,
+    onDeleteExtra: onDeleteExtra
   }));
 }
+function ResolveButton({
+  onClick,
+  children,
+  variant
+}) {
+  const styles = {
+    add: {
+      background: COLORS.teal,
+      color: COLORS.ink
+    },
+    transfer: {
+      background: COLORS.panelLight,
+      color: COLORS.paper,
+      border: `1px solid ${COLORS.brass}`
+    },
+    edit: {
+      background: COLORS.panelLight,
+      color: COLORS.paper,
+      border: `1px solid ${COLORS.line}`
+    },
+    danger: {
+      background: "none",
+      color: COLORS.coral,
+      border: `1px solid ${COLORS.coral}`
+    },
+    ghost: {
+      background: "none",
+      color: COLORS.paperDim,
+      border: `1px solid ${COLORS.line}`
+    }
+  };
+  return /*#__PURE__*/React.createElement("button", {
+    onClick,
+    style: {
+      ...styles[variant],
+      fontSize: "11px",
+      fontWeight: 600,
+      borderRadius: "5px",
+      padding: "4px 9px",
+      whiteSpace: "nowrap",
+      flexShrink: 0
+    }
+  }, children);
+}
 function ValidationReport({
-  result
+  result,
+  resolvedRows,
+  onAddToLog,
+  onMarkTransfer,
+  onEditExtra,
+  onConfirmExtra,
+  onDeleteExtra
 }) {
   const {
     matched,
@@ -2600,6 +2744,7 @@ function ValidationReport({
     accountLabel
   } = result;
   const clean = missing.length === 0 && extra.length === 0;
+  const resolved = resolvedRows || {};
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       background: clean ? COLORS.panel : COLORS.panel,
@@ -2656,25 +2801,55 @@ function ValidationReport({
       fontWeight: 600,
       marginBottom: "8px"
     }
-  }, "On the statement, not in the log (", missing.length, ")"), missing.map((r, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    style: {
-      display: "flex",
-      justifyContent: "space-between",
-      padding: "6px 0",
-      borderBottom: `1px solid ${COLORS.line}`,
-      fontSize: "12.5px"
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paper
-    }
-  }, r.date, " · ", r.description), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paper,
-      fontFamily: FONT_MONO
-    }
-  }, fmtMoney(r.amount, 2))))), extra.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "On the statement, not in the log (", missing.length, ")"), missing.map((r, i) => {
+    const state = resolved[rowKey(r)];
+    return /*#__PURE__*/React.createElement("div", {
+      key: i,
+      style: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "10px",
+        padding: "6px 0",
+        borderBottom: `1px solid ${COLORS.line}`,
+        fontSize: "12.5px",
+        opacity: state ? 0.55 : 1
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: COLORS.paper,
+        minWidth: 0,
+        flex: 1,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap"
+      }
+    }, r.date, " · ", r.description), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: COLORS.paper,
+        fontFamily: FONT_MONO,
+        flexShrink: 0
+      }
+    }, fmtMoney(r.amount, 2)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: "6px",
+        flexShrink: 0
+      }
+    }, state ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: COLORS.teal,
+        fontSize: "11px",
+        fontWeight: 600
+      }
+    }, state === "added" ? "✓ Logged" : "↔ Transfer") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ResolveButton, {
+      variant: "add",
+      onClick: () => onAddToLog(r)
+    }, "Add to log"), /*#__PURE__*/React.createElement(ResolveButton, {
+      variant: "transfer",
+      onClick: () => onMarkTransfer(r)
+    }, "CC payment"))));
+  })), extra.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: "18px"
     }
@@ -2685,25 +2860,58 @@ function ValidationReport({
       fontWeight: 600,
       marginBottom: "8px"
     }
-  }, "In the log, not on the statement (", extra.length, ")"), extra.map((t, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    style: {
-      display: "flex",
-      justifyContent: "space-between",
-      padding: "6px 0",
-      borderBottom: `1px solid ${COLORS.line}`,
-      fontSize: "12.5px"
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paper
-    }
-  }, t.date, " · ", t.note || t.vendor), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paper,
-      fontFamily: FONT_MONO
-    }
-  }, fmtMoney(t.amount, 2))))), clean && /*#__PURE__*/React.createElement("div", {
+  }, "In the log, not on the statement (", extra.length, ")"), extra.map((t, i) => {
+    const state = resolved[t.id];
+    return /*#__PURE__*/React.createElement("div", {
+      key: i,
+      style: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "10px",
+        padding: "6px 0",
+        borderBottom: `1px solid ${COLORS.line}`,
+        fontSize: "12.5px",
+        opacity: state ? 0.55 : 1
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: COLORS.paper,
+        minWidth: 0,
+        flex: 1,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap"
+      }
+    }, t.date, " · ", t.note || t.vendor), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: COLORS.paper,
+        fontFamily: FONT_MONO,
+        flexShrink: 0
+      }
+    }, fmtMoney(t.amount, 2)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: "6px",
+        flexShrink: 0
+      }
+    }, state ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: state === "deleted" ? COLORS.coral : COLORS.teal,
+        fontSize: "11px",
+        fontWeight: 600
+      }
+    }, state === "deleted" ? "Deleted" : "Confirmed") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ResolveButton, {
+      variant: "edit",
+      onClick: () => onEditExtra(t)
+    }, "Recategorize"), /*#__PURE__*/React.createElement(ResolveButton, {
+      variant: "ghost",
+      onClick: () => onConfirmExtra(t)
+    }, "Confirm"), /*#__PURE__*/React.createElement(ResolveButton, {
+      variant: "danger",
+      onClick: () => onDeleteExtra(t)
+    }, "Delete"))));
+  })), clean && /*#__PURE__*/React.createElement("div", {
     style: {
       color: COLORS.teal,
       fontSize: "13px"
