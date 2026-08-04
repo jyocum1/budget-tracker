@@ -2961,7 +2961,7 @@ function ValidationReport({
     }
   }, "On the statement, not in the log (", missing.length, ")"), missing.map((r, i) => {
     const state = resolved[rowKey(r)];
-    const isSearching = searchKey === rowKey(r);
+    const isSearching = !state && searchKey === rowKey(r);
     return /*#__PURE__*/React.createElement("div", {
       key: i,
       style: {
