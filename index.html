@@ -939,20 +939,51 @@ function extractStatementRows(rows) {
 function daysBetween(d1, d2) {
   return Math.abs((new Date(d1) - new Date(d2)) / 86400000);
 }
-// Post-validation budget summary: for the exact date range just validated, compares
-// actual spend per category against the full monthly target, flags the largest
-// individual transactions as outliers, and suggests raising/lowering targets that
-// are consistently off. Excludes mortgage/aoao/transfer from spend totals, matching
-// the convention used everywhere else in the app.
+function shiftMonthKey(monthKey, delta) {
+  const [y, m] = monthKey.split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+// Post-validation budget summary. The hit/miss verdict and outliers below compare
+// the exact validated period against the current target, same as before.
+//
+// Target *recommendations* use a separate, deliberately simple rule: initial targets
+// were set from actual 2025 spend, and from there each month's recommendation is
+// anchored to the immediately preceding calendar month's real spend, rounded to the
+// nearest $5 — one consistent, explainable formula rather than a percentage guess.
+// Differences under $10 are ignored as noise. A category with $0 actual last month
+// is flagged as a possible missing-entry gap instead of silently proposing a $0
+// target, since several "essential" bills (insurance, phone, gas...) should never
+// truly be zero for a full month.
+// Mortgage/AOAO/Insurance stay excluded throughout — their targets are fixed or
+// formula-derived (mortgage is the biweekly-to-monthly amortized average; insurance
+// is escrowed into the mortgage payment plus a semi-annual auto-pay) and aren't
+// meant to chase month-to-month actuals.
+// For essential categories, a suspiciously low previous-month actual — zero, or
+// under half of target — is flagged as "verify before adjusting" rather than acted
+// on, since that pattern usually means an account hasn't been validated yet rather
+// than a genuine drop in spending.
 function computeBudgetSummary(dateRange, transactions, categories) {
   const [minDate, maxDate] = dateRange;
-  const inRange = transactions.filter(t => t.date >= minDate && t.date <= maxDate && t.categoryId !== "mortgage" && t.categoryId !== "aoao" && t.categoryId !== "transfer");
+  const inRange = transactions.filter(t => t.date >= minDate && t.date <= maxDate && t.categoryId !== "mortgage" && t.categoryId !== "aoao" && t.categoryId !== "insurance" && t.categoryId !== "transfer");
   const byCategory = {};
   inRange.forEach(t => {
     if (!byCategory[t.categoryId]) byCategory[t.categoryId] = [];
     byCategory[t.categoryId].push(t);
   });
-  const realCats = categories.filter(c => c.id !== "transfer" && c.id !== "mortgage" && c.id !== "aoao");
+  const periodMonth = minDate.slice(0, 7);
+  const prevMonthKey = shiftMonthKey(periodMonth, -1);
+  const prevMonthSpend = {};
+  transactions.forEach(t => {
+    if (t.categoryId === "mortgage" || t.categoryId === "aoao" || t.categoryId === "insurance" || t.categoryId === "transfer") return;
+    if (t.date.slice(0, 7) === prevMonthKey) {
+      prevMonthSpend[t.categoryId] = (prevMonthSpend[t.categoryId] || 0) + t.amount;
+    }
+  });
+  const ROUND_TO = 5;
+  const MIN_DELTA = 10;
+  const LOW_CONFIDENCE_RATIO = 0.5;
+  const realCats = categories.filter(c => c.id !== "transfer" && c.id !== "mortgage" && c.id !== "aoao" && c.id !== "insurance");
   const rows = realCats.map(c => {
     const txns = byCategory[c.id] || [];
     const actual = txns.reduce((s, t) => s + t.amount, 0);
@@ -965,14 +996,21 @@ function computeBudgetSummary(dateRange, transactions, categories) {
     } else if (actual > 0) {
       status = "over";
     }
+    const prevActual = prevMonthSpend[c.id] || 0;
     let suggestion = null;
     let suggestedTarget = null;
-    if (target > 0 && pct > 1.15) {
-      suggestedTarget = Math.ceil(actual / 5) * 5;
-      suggestion = `Raise to about ${fmtMoney(suggestedTarget, 0)}/mo to match actual spending`;
-    } else if (target > 0 && pct < 0.7 && actual > 0) {
-      suggestedTarget = Math.ceil(actual / 5) * 5;
-      suggestion = `Lower to about ${fmtMoney(suggestedTarget, 0)}/mo — this much room is going unused`;
+    let actionable = false;
+    if (prevActual === 0 && target > 0 && c.essential) {
+      suggestion = `No spend logged in ${prevMonthKey} — check for missing entries or an unvalidated account before adjusting this target.`;
+    } else if (target > 0 && c.essential && prevActual > 0 && prevActual < target * LOW_CONFIDENCE_RATIO) {
+      suggestion = `Only ${fmtMoney(prevActual)} logged in ${prevMonthKey} vs a ${fmtMoney(target)} target — that looks low for an essential category. Verify all relevant accounts are validated before lowering this target.`;
+    } else {
+      const diff = prevActual - target;
+      if (Math.abs(diff) >= MIN_DELTA) {
+        suggestedTarget = Math.round(prevActual / ROUND_TO) * ROUND_TO;
+        actionable = true;
+        suggestion = diff < 0 ? `${prevMonthKey} actual was ${fmtMoney(prevActual)}, under the ${fmtMoney(target)} target — lower to ${fmtMoney(suggestedTarget, 0)}` : `${prevMonthKey} actual was ${fmtMoney(prevActual)}, over the ${fmtMoney(target)} target — raise to ${fmtMoney(suggestedTarget, 0)}`;
+      }
     }
     return {
       category: c,
@@ -983,7 +1021,8 @@ function computeBudgetSummary(dateRange, transactions, categories) {
       status,
       count: txns.length,
       suggestion,
-      suggestedTarget
+      suggestedTarget,
+      actionable
     };
   }).filter(r => r.actual > 0 || r.target > 0);
   rows.sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
@@ -993,6 +1032,7 @@ function computeBudgetSummary(dateRange, transactions, categories) {
   const outliers = [...inRange].sort((a, b) => b.amount - a.amount).slice(0, 5);
   return {
     dateRange,
+    prevMonthKey,
     rows,
     totalActual,
     totalTarget,
@@ -1005,6 +1045,7 @@ function computeBudgetSummary(dateRange, transactions, categories) {
 function buildSummaryHTML(summary, catById, accountLabel) {
   const {
     dateRange,
+    prevMonthKey,
     rows,
     totalActual,
     totalTarget,
@@ -1039,8 +1080,8 @@ function buildSummaryHTML(summary, catById, accountLabel) {
       <td class="num">${fmtMoney(t.amount, 2)}</td>
     </tr>`;
   }).join("");
-  const offCats = rows.filter(r => r.status !== "on track" && r.suggestion);
-  const recsHtml = offCats.length === 0 ? `<p class="dim">Nothing stands out — targets look reasonable for this period.</p>` : `<ul>${offCats.map(r => `<li><strong>${esc(r.category.name)}:</strong> ${esc(r.suggestion)}</li>`).join("")}</ul>`;
+  const offCats = rows.filter(r => r.suggestion);
+  const recsHtml = offCats.length === 0 ? `<p class="dim">Nothing stands out — targets look reasonable based on ${esc(prevMonthKey)}.</p>` : `<ul>${offCats.map(r => `<li><strong>${esc(r.category.name)}:</strong> ${esc(r.suggestion)}</li>`).join("")}</ul>`;
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <title>Budget Summary ${esc(dateRange[0])} to ${esc(dateRange[1])}</title>
@@ -1069,7 +1110,7 @@ function buildSummaryHTML(summary, catById, accountLabel) {
   <table><tr><th>Category</th><th class="num">Actual</th><th class="num">Target</th><th></th></tr>${catRowsHtml || '<tr><td colspan="4" class="dim">No spend in this period.</td></tr>'}</table>
   <h2>Largest transactions this period</h2>
   <table><tr><th>Date</th><th>Category</th><th>Note</th><th class="num">Amount</th></tr>${outlierRowsHtml || '<tr><td colspan="4" class="dim">None.</td></tr>'}</table>
-  <h2>Target adjustments worth considering</h2>
+  <h2>Target adjustments worth considering (based on ${esc(prevMonthKey)} actuals)</h2>
   ${recsHtml}
 </body></html>`;
 }
@@ -3127,6 +3168,7 @@ function BudgetSummaryPanel({
 }) {
   const {
     dateRange,
+    prevMonthKey,
     rows,
     totalActual,
     totalTarget,
@@ -3145,7 +3187,8 @@ function BudgetSummaryPanel({
     "on track": "On track",
     "no targets set": "No targets set for these categories"
   };
-  const offCats = rows.filter(r => r.status !== "on track" && r.suggestion);
+  const offCats = rows.filter(r => r.suggestion);
+  const actionableCats = offCats.filter(r => r.actionable);
   return /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: "12px",
@@ -3300,9 +3343,15 @@ function BudgetSummaryPanel({
       fontSize: "13px",
       fontWeight: 600
     }
-  }, "Target adjustments worth considering"), offCats.length > 0 && onApplySuggestions && /*#__PURE__*/React.createElement(ResolveButton, {
+  }, "Target adjustments worth considering ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: COLORS.paperDim,
+      fontWeight: 400,
+      fontSize: "11px"
+    }
+  }, "(based on ", prevMonthKey, " actuals)")), actionableCats.length > 0 && onApplySuggestions && /*#__PURE__*/React.createElement(ResolveButton, {
     variant: "add",
-    onClick: () => onApplySuggestions(offCats.map(r => ({
+    onClick: () => onApplySuggestions(actionableCats.map(r => ({
       id: r.category.id,
       target: r.suggestedTarget
     })))
@@ -3311,10 +3360,10 @@ function BudgetSummaryPanel({
       color: COLORS.paperDim,
       fontSize: "12px"
     }
-  }, "Nothing stands out — targets look reasonable for this period.") : offCats.map(r => /*#__PURE__*/React.createElement("div", {
+  }, "Nothing stands out — targets look reasonable based on ", prevMonthKey, ".") : offCats.map(r => /*#__PURE__*/React.createElement("div", {
     key: r.category.id,
     style: {
-      color: COLORS.paperDim,
+      color: r.actionable ? COLORS.paperDim : COLORS.brass,
       fontSize: "12.5px",
       padding: "3px 0"
     }
@@ -3500,6 +3549,10 @@ function ValidationReport({
   const [editBuffer, setEditBuffer] = useState(null);
   const [searchKey, setSearchKey] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [vendorFilter, setVendorFilter] = useState("");
+  const vq = vendorFilter.trim().toLowerCase();
+  const filteredMissing = vq ? missing.filter(r => (r.description || "").toLowerCase().includes(vq)) : missing;
+  const filteredExtra = vq ? extra.filter(t => `${t.note || ""} ${t.vendor || ""}`.toLowerCase().includes(vq)) : extra;
   function toggleSearch(r) {
     const key = rowKey(r);
     if (searchKey === key) {
@@ -3580,7 +3633,22 @@ function ValidationReport({
     style: {
       color: COLORS.coral
     }
-  }, extra.length, " logged but not on the statement"), " (", fmtMoney(extraTotal, 2), ")"), ".")), missing.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, extra.length, " logged but not on the statement"), " (", fmtMoney(extraTotal, 2), ")"), ".")), (missing.length > 0 || extra.length > 0) && /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: vendorFilter,
+    onChange: e => setVendorFilter(e.target.value),
+    placeholder: "Filter by vendor/payee (e.g. Menehune, Kilauea)...",
+    style: {
+      background: COLORS.panel,
+      color: COLORS.paper,
+      border: `1px solid ${COLORS.line}`,
+      borderRadius: "6px",
+      padding: "8px 10px",
+      fontSize: "13px",
+      width: "100%",
+      marginBottom: "18px"
+    }
+  }), missing.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: "18px"
     }
@@ -3591,7 +3659,12 @@ function ValidationReport({
       fontWeight: 600,
       marginBottom: "8px"
     }
-  }, "On the statement, not in the log (", missing.length, ")"), missing.map((r, i) => {
+  }, "On the statement, not in the log (", vq ? `${filteredMissing.length} of ${missing.length}` : missing.length, ")"), vq && filteredMissing.length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: COLORS.paperDim,
+      fontSize: "12px"
+    }
+  }, "No matches for \"", vendorFilter, "\"."), filteredMissing.map((r, i) => {
     const state = resolved[rowKey(r)];
     const isSearching = !state && searchKey === rowKey(r);
     return /*#__PURE__*/React.createElement("div", {
@@ -3668,7 +3741,12 @@ function ValidationReport({
       fontWeight: 600,
       marginBottom: "8px"
     }
-  }, "In the log, not on the statement (", extra.length, ")"), extra.map((t, i) => {
+  }, "In the log, not on the statement (", vq ? `${filteredExtra.length} of ${extra.length}` : extra.length, ")"), vq && filteredExtra.length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: COLORS.paperDim,
+      fontSize: "12px"
+    }
+  }, "No matches for \"", vendorFilter, "\"."), filteredExtra.map((t, i) => {
     const state = resolved[t.id];
     const isOpen = expandedId === t.id;
     const cat = catById ? catById[t.categoryId] : null;
