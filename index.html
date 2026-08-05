@@ -1972,9 +1972,13 @@ function BudgetTracker() {
     startEdit: startEdit
   }), tab === "log" && /*#__PURE__*/React.createElement(LogView, {
     transactions: transactions,
+    monthTxns: monthTxns,
     catById: catById,
     deleteTransaction: deleteTransaction,
-    startEdit: startEdit
+    startEdit: startEdit,
+    year: year,
+    month: month,
+    shiftMonth: shiftMonth
   }), tab === "vendors" && /*#__PURE__*/React.createElement(VendorsView, {
     year: year,
     month: month,
@@ -1987,7 +1991,10 @@ function BudgetTracker() {
     categorySpend: categorySpend,
     updateCategoryTarget: updateCategoryTarget,
     totalMonthlyTarget: totalMonthlyTarget,
-    logTargetChange: logTargetChange
+    logTargetChange: logTargetChange,
+    year: year,
+    month: month,
+    shiftMonth: shiftMonth
   }), tab === "trends" && /*#__PURE__*/React.createElement(TrendsView, {
     trendData: trendData,
     pieData: pieData,
@@ -2307,15 +2314,78 @@ function EmptyState({
 }
 function LogView({
   transactions,
+  monthTxns,
   catById,
   deleteTransaction,
-  startEdit
+  startEdit,
+  year,
+  month,
+  shiftMonth
 }) {
   const [filter, setFilter] = useState("all");
-  const sorted = [...transactions].sort((a, b) => b.date.localeCompare(a.date));
+  const [scope, setScope] = useState("month");
+  const base = scope === "month" ? monthTxns : transactions;
+  const sorted = [...base].sort((a, b) => b.date.localeCompare(a.date));
   const filtered = filter === "all" ? sorted : sorted.filter(t => t.categoryId === filter);
+  const filteredTotal = filtered.reduce((s, t) => s + t.amount, 0);
   const cats = Object.values(catById);
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      marginBottom: "10px"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setScope("month"),
+    style: {
+      background: scope === "month" ? COLORS.teal : "none",
+      color: scope === "month" ? COLORS.ink : COLORS.paperDim,
+      border: `1px solid ${scope === "month" ? COLORS.teal : COLORS.line}`,
+      borderRadius: "6px",
+      padding: "5px 10px",
+      fontSize: "12px",
+      fontWeight: 600
+    }
+  }, "This month"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setScope("all"),
+    style: {
+      background: scope === "all" ? COLORS.teal : "none",
+      color: scope === "all" ? COLORS.ink : COLORS.paperDim,
+      border: `1px solid ${scope === "all" ? COLORS.teal : COLORS.line}`,
+      borderRadius: "6px",
+      padding: "5px 10px",
+      fontSize: "12px",
+      fontWeight: 600
+    }
+  }, "All time"), scope === "month" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    onClick: () => shiftMonth(-1),
+    style: {
+      background: "none",
+      border: "none",
+      color: COLORS.paperDim,
+      padding: "4px"
+    }
+  }, /*#__PURE__*/React.createElement(ChevLeft, {
+    size: 16
+  })), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: COLORS.paper,
+      fontSize: "13px",
+      fontWeight: 600,
+      letterSpacing: "1px"
+    }
+  }, MONTH_NAMES[month].toUpperCase(), " ", year), /*#__PURE__*/React.createElement("button", {
+    onClick: () => shiftMonth(1),
+    style: {
+      background: "none",
+      border: "none",
+      color: COLORS.paperDim,
+      padding: "4px"
+    }
+  }, /*#__PURE__*/React.createElement(ChevRight, {
+    size: 16
+  })))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -2329,7 +2399,7 @@ function LogView({
       fontSize: "15px",
       fontWeight: 600
     }
-  }, "Full log (", filtered.length, ")"), /*#__PURE__*/React.createElement("select", {
+  }, filter === "all" ? "Log" : (catById[filter] ? catById[filter].name : filter), " (", filtered.length, ") — ", fmtMoney(filteredTotal)), /*#__PURE__*/React.createElement("select", {
     value: filter,
     onChange: e => setFilter(e.target.value),
     style: {
@@ -2366,11 +2436,54 @@ function CategoriesView({
   categorySpend,
   updateCategoryTarget,
   totalMonthlyTarget,
-  logTargetChange
+  logTargetChange,
+  year,
+  month,
+  shiftMonth
 }) {
   const realCats = categories.filter(c => c.id !== "transfer");
   const editStartRef = useRef({});
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      marginBottom: "12px"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => shiftMonth(-1),
+    style: {
+      background: "none",
+      border: "none",
+      color: COLORS.paperDim,
+      padding: "4px"
+    }
+  }, /*#__PURE__*/React.createElement(ChevLeft, {
+    size: 16
+  })), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: COLORS.paper,
+      fontSize: "13px",
+      fontWeight: 600,
+      letterSpacing: "1px"
+    }
+  }, MONTH_NAMES[month].toUpperCase(), " ", year), /*#__PURE__*/React.createElement("button", {
+    onClick: () => shiftMonth(1),
+    style: {
+      background: "none",
+      border: "none",
+      color: COLORS.paperDim,
+      padding: "4px"
+    }
+  }, /*#__PURE__*/React.createElement(ChevRight, {
+    size: 16
+  })), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: COLORS.paperDim,
+      fontSize: "12px",
+      marginLeft: "4px"
+    }
+  }, "— the \"actual\" figures below are spend logged in this month only")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
