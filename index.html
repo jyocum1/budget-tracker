@@ -1449,6 +1449,36 @@ function BudgetTracker() {
     };
     reader.readAsText(file);
   }
+  function addStatementRows(items) {
+    // items: [{ row: {date, description, amount}, categoryId }]
+    if (!items.length || !validationResult) return;
+    const label = validationResult.accountLabel || "";
+    const stamp = Date.now();
+    const newTxns = items.map((it, i) => ({
+      id: "t-stmt-" + stamp + "-" + i,
+      date: it.row.date,
+      categoryId: it.categoryId,
+      amount: it.row.amount,
+      vendor: it.row.description,
+      note: (label ? label + ": " : "") + it.row.description
+    }));
+    setTransactions([...newTxns, ...transactions]);
+    const added = new Set(items.map(it => it.row));
+    const stillMissing = validationResult.missing.filter(r => !added.has(r));
+    const addedRows = validationResult.missing.filter(r => added.has(r));
+    const addedTotal = addedRows.reduce((sum, r) => sum + r.amount, 0);
+    setValidationResult({
+      ...validationResult,
+      missing: stillMissing,
+      missingTotal: validationResult.missingTotal - addedTotal,
+      matched: [...validationResult.matched, ...newTxns.map((t, i) => ({
+        statement: items[i].row,
+        logged: t
+      }))],
+      matchedTotal: validationResult.matchedTotal + addedTotal
+    });
+    showToast("Added " + items.length + " transaction" + (items.length === 1 ? "" : "s") + " to the log");
+  }
   function validateStatementFile(file, accountLabel) {
     const reader = new FileReader();
     reader.onload = e => {
@@ -1749,6 +1779,9 @@ function BudgetTracker() {
     validationAccount: validationAccount,
     setValidationAccount: setValidationAccount,
     validationResult: validationResult,
+    categories: categories,
+    transactions: transactions,
+    onAddRows: addStatementRows,
     onFileChosen: file => validateStatementFile(file, validationAccount)
   }))), formOpen && /*#__PURE__*/React.createElement(QuickAddModal, {
     onClose: closeForm,
@@ -2506,6 +2539,9 @@ function ValidateView({
   validationAccount,
   setValidationAccount,
   validationResult,
+  categories,
+  transactions,
+  onAddRows,
   onFileChosen
 }) {
   const ACCOUNTS = ["Citi", "FHB Checking", "Chase ...3154", "Chase ...1323", "Apple Cash"];
@@ -2581,12 +2617,34 @@ function ValidateView({
   })), !validationResult ? /*#__PURE__*/React.createElement(EmptyState, {
     text: "No statement checked yet. Choose a CSV above to run a validation pass."
   }) : /*#__PURE__*/React.createElement(ValidationReport, {
-    result: validationResult
+    result: validationResult,
+    categories: categories,
+    transactions: transactions,
+    onAddRows: onAddRows
   }));
 }
 function ValidationReport({
-  result
+  result,
+  categories,
+  transactions,
+  onAddRows
 }) {
+  const [picks, setPicks] = React.useState({});
+  // Suggest a category by looking at past log entries with the same vendor text.
+  function suggestCategory(desc) {
+    const key = (desc || "").toLowerCase().replace(/[^a-z]/g, "").slice(0, 10);
+    if (!key) return "";
+    const counts = {};
+    (transactions || []).forEach(t => {
+      const v = ((t.vendor || t.note || "") + "").toLowerCase().replace(/[^a-z]/g, "");
+      if (v.includes(key) && t.categoryId) counts[t.categoryId] = (counts[t.categoryId] || 0) + 1;
+    });
+    const best = Object.keys(counts).sort((x, y) => counts[y] - counts[x])[0];
+    return best || "";
+  }
+  function pickFor(i, r) {
+    return picks[i] != null ? picks[i] : suggestCategory(r.description);
+  }
   const {
     matched,
     missing,
@@ -2656,25 +2714,25 @@ function ValidationReport({
       fontWeight: 600,
       marginBottom: "8px"
     }
-  }, "On the statement, not in the log (", missing.length, ")"), missing.map((r, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    style: {
-      display: "flex",
-      justifyContent: "space-between",
-      padding: "6px 0",
-      borderBottom: `1px solid ${COLORS.line}`,
-      fontSize: "12.5px"
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paper
-    }
-  }, r.date, " · ", r.description), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paper,
-      fontFamily: FONT_MONO
-    }
-  }, fmtMoney(r.amount, 2))))), extra.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "On the statement, not in the log (", missing.length, ")"), (function () {
+    const ready = result.missing.map((r, i) => ({ r, c: pickFor(i, r) })).filter(x => x.c);
+    return /*#__PURE__*/React.createElement(React.Fragment, null, result.missing.map((r, i) => /*#__PURE__*/React.createElement("div", {
+      key: i,
+      style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", flexWrap: "wrap", padding: "6px 0", borderBottom: `1px solid ${COLORS.line}`, fontSize: "12.5px" }
+    }, /*#__PURE__*/React.createElement("span", { style: { color: COLORS.paper, flex: "1 1 220px" } }, r.date, " · ", r.description), /*#__PURE__*/React.createElement("span", { style: { color: COLORS.paper, fontFamily: FONT_MONO } }, fmtMoney(r.amount, 2)), onAddRows && /*#__PURE__*/React.createElement("select", {
+      value: pickFor(i, r),
+      onChange: e => setPicks({ ...picks, [i]: e.target.value }),
+      style: { background: COLORS.panel, color: COLORS.paper, border: `1px solid ${COLORS.line}`, fontSize: "12px", borderRadius: "6px", padding: "4px 6px" }
+    }, /*#__PURE__*/React.createElement("option", { value: "" }, "Category…"), (categories || []).map(c => /*#__PURE__*/React.createElement("option", { key: c.id, value: c.id }, c.name))), onAddRows && /*#__PURE__*/React.createElement("button", {
+      disabled: !pickFor(i, r),
+      onClick: () => { setPicks({}); onAddRows([{ row: r, categoryId: pickFor(i, r) }]); },
+      style: { background: pickFor(i, r) ? COLORS.brass : COLORS.line, color: COLORS.ink, border: "none", borderRadius: "6px", padding: "4px 10px", fontWeight: 600, fontSize: "12px", opacity: pickFor(i, r) ? 1 : 0.5 }
+    }, "Add"))), onAddRows && result.missing.length > 1 && /*#__PURE__*/React.createElement("button", {
+      disabled: ready.length === 0,
+      onClick: () => { setPicks({}); onAddRows(ready.map(x => ({ row: x.r, categoryId: x.c }))); },
+      style: { marginTop: "10px", background: ready.length ? COLORS.brass : COLORS.line, color: COLORS.ink, border: "none", borderRadius: "6px", padding: "8px 14px", fontWeight: 600, fontSize: "13px", opacity: ready.length ? 1 : 0.5 }
+    }, "Add all with a category (" + ready.length + ")"));
+  })()),extra.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: "18px"
     }
