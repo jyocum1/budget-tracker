@@ -420,7 +420,7 @@ onAuthStateChanged(auth, user => {
 });
 
 let saveTimer = null;
-window.firestoreSave = function (categories, transactions, onboardingComplete, targetHistory) {
+window.firestoreSave = function (categories, transactions, onboardingComplete) {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     authReady.then(() => {
@@ -428,7 +428,6 @@ window.firestoreSave = function (categories, transactions, onboardingComplete, t
         categories,
         transactions,
         onboardingComplete: !!onboardingComplete,
-        targetHistory: targetHistory || [],
         updatedAt: Date.now()
       }).catch(err => console.error("Firestore save failed:", err));
     });
@@ -483,7 +482,6 @@ const FONT_MONO = "'IBM Plex Mono', 'Courier New', monospace";
 const STORAGE_KEY_TXNS = "budget-tracker-transactions-v1";
 const STORAGE_KEY_CATS = "budget-tracker-categories-v1";
 const STORAGE_KEY_ONBOARDED = "budget-tracker-onboarded-v1";
-const STORAGE_KEY_TARGETHIST = "budget-tracker-target-history-v1";
 
 /* ---------- inline icons (no external icon library needed) ---------- */
 function Icon({
@@ -812,13 +810,6 @@ const DEFAULT_CATEGORIES = [{
   target: 2.34,
   fixed: true,
   essential: true
-}, {
-  id: "transfer",
-  name: "Transfers (CC Payments)",
-  target: 0,
-  fixed: true,
-  essential: false,
-  isTransfer: true
 }];
 const DEFAULT_TRANSACTIONS = [];
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -938,186 +929,6 @@ function extractStatementRows(rows) {
 }
 function daysBetween(d1, d2) {
   return Math.abs((new Date(d1) - new Date(d2)) / 86400000);
-}
-function shiftMonthKey(monthKey, delta) {
-  const [y, m] = monthKey.split("-").map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-// Post-validation budget summary. The hit/miss verdict and outliers below compare
-// the exact validated period against the current target, same as before.
-//
-// Target *recommendations* use a separate, deliberately simple rule: initial targets
-// were set from actual 2025 spend, and from there each month's recommendation is
-// anchored to the immediately preceding calendar month's real spend, rounded to the
-// nearest $5 — one consistent, explainable formula rather than a percentage guess.
-// Differences under $10 are ignored as noise. A category with $0 actual last month
-// is flagged as a possible missing-entry gap instead of silently proposing a $0
-// target, since several "essential" bills (insurance, phone, gas...) should never
-// truly be zero for a full month.
-// Mortgage/AOAO/Insurance stay excluded throughout — their targets are fixed or
-// formula-derived (mortgage is the biweekly-to-monthly amortized average; insurance
-// is escrowed into the mortgage payment plus a semi-annual auto-pay) and aren't
-// meant to chase month-to-month actuals.
-// For essential categories, a suspiciously low previous-month actual — zero, or
-// under half of target — is flagged as "verify before adjusting" rather than acted
-// on, since that pattern usually means an account hasn't been validated yet rather
-// than a genuine drop in spending.
-function computeBudgetSummary(dateRange, transactions, categories) {
-  const [minDate, maxDate] = dateRange;
-  const inRange = transactions.filter(t => t.date >= minDate && t.date <= maxDate && t.categoryId !== "mortgage" && t.categoryId !== "aoao" && t.categoryId !== "insurance" && t.categoryId !== "transfer");
-  const byCategory = {};
-  inRange.forEach(t => {
-    if (!byCategory[t.categoryId]) byCategory[t.categoryId] = [];
-    byCategory[t.categoryId].push(t);
-  });
-  const periodMonth = minDate.slice(0, 7);
-  const prevMonthKey = shiftMonthKey(periodMonth, -1);
-  const prevMonthSpend = {};
-  transactions.forEach(t => {
-    if (t.categoryId === "mortgage" || t.categoryId === "aoao" || t.categoryId === "insurance" || t.categoryId === "transfer") return;
-    if (t.date.slice(0, 7) === prevMonthKey) {
-      prevMonthSpend[t.categoryId] = (prevMonthSpend[t.categoryId] || 0) + t.amount;
-    }
-  });
-  const ROUND_TO = 5;
-  const MIN_DELTA = 10;
-  const LOW_CONFIDENCE_RATIO = 0.5;
-  const realCats = categories.filter(c => c.id !== "transfer" && c.id !== "mortgage" && c.id !== "aoao" && c.id !== "insurance");
-  const rows = realCats.map(c => {
-    const txns = byCategory[c.id] || [];
-    const actual = txns.reduce((s, t) => s + t.amount, 0);
-    const target = c.target || 0;
-    const variance = actual - target;
-    const pct = target > 0 ? actual / target : actual > 0 ? Infinity : 0;
-    let status = "on track";
-    if (target > 0) {
-      if (pct > 1.15) status = "over";else if (pct < 0.7 && actual > 0) status = "under";else if (pct >= 0.7 && pct <= 1.15) status = "on track";
-    } else if (actual > 0) {
-      status = "over";
-    }
-    const prevActual = prevMonthSpend[c.id] || 0;
-    let suggestion = null;
-    let suggestedTarget = null;
-    let actionable = false;
-    if (prevActual === 0 && target > 0 && c.essential) {
-      suggestion = `No spend logged in ${prevMonthKey} — check for missing entries or an unvalidated account before adjusting this target.`;
-    } else if (target > 0 && c.essential && prevActual > 0 && prevActual < target * LOW_CONFIDENCE_RATIO) {
-      suggestion = `Only ${fmtMoney(prevActual)} logged in ${prevMonthKey} vs a ${fmtMoney(target)} target — that looks low for an essential category. Verify all relevant accounts are validated before lowering this target.`;
-    } else {
-      const diff = prevActual - target;
-      if (Math.abs(diff) >= MIN_DELTA) {
-        suggestedTarget = Math.round(prevActual / ROUND_TO) * ROUND_TO;
-        actionable = true;
-        suggestion = diff < 0 ? `${prevMonthKey} actual was ${fmtMoney(prevActual)}, under the ${fmtMoney(target)} target — lower to ${fmtMoney(suggestedTarget, 0)}` : `${prevMonthKey} actual was ${fmtMoney(prevActual)}, over the ${fmtMoney(target)} target — raise to ${fmtMoney(suggestedTarget, 0)}`;
-      }
-    }
-    return {
-      category: c,
-      actual,
-      target,
-      variance,
-      pct,
-      status,
-      count: txns.length,
-      suggestion,
-      suggestedTarget,
-      actionable
-    };
-  }).filter(r => r.actual > 0 || r.target > 0);
-  rows.sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
-  const totalActual = rows.reduce((s, r) => s + r.actual, 0);
-  const totalTarget = rows.reduce((s, r) => s + r.target, 0);
-  const overallStatus = totalTarget === 0 ? "no targets set" : totalActual > totalTarget * 1.05 ? "over" : totalActual < totalTarget * 0.9 ? "under" : "on track";
-  const outliers = [...inRange].sort((a, b) => b.amount - a.amount).slice(0, 5);
-  return {
-    dateRange,
-    prevMonthKey,
-    rows,
-    totalActual,
-    totalTarget,
-    overallStatus,
-    outliers
-  };
-}
-// Builds a self-contained, printable HTML document from a budget summary — opens
-// cleanly in any browser and can be printed or saved as a PDF from there (Cmd/Ctrl+P).
-function buildSummaryHTML(summary, catById, accountLabel) {
-  const {
-    dateRange,
-    prevMonthKey,
-    rows,
-    totalActual,
-    totalTarget,
-    overallStatus,
-    outliers
-  } = summary;
-  const statusLabel = {
-    over: "Over budget",
-    under: "Under budget",
-    "on track": "On track",
-    "no targets set": "No targets set for these categories"
-  };
-  const statusColor = {
-    over: "#B23A2F",
-    under: "#2F7A6B",
-    "on track": "#9A6B2A",
-    "no targets set": "#666"
-  };
-  const esc = s => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const catRowsHtml = rows.map(r => `<tr>
-      <td>${esc(r.category.name)} <span class="dim">(${r.count})</span></td>
-      <td class="num">${fmtMoney(r.actual)}</td>
-      <td class="num">${r.target > 0 ? fmtMoney(r.target) : "—"}</td>
-      <td class="status" style="color:${statusColor[r.status]}">${esc(statusLabel[r.status])}</td>
-    </tr>`).join("");
-  const outlierRowsHtml = outliers.map(t => {
-    const cat = catById ? catById[t.categoryId] : null;
-    return `<tr>
-      <td>${esc(t.date)}</td>
-      <td>${esc(cat ? cat.name : t.categoryId)}</td>
-      <td>${esc(t.note || t.vendor || "")}</td>
-      <td class="num">${fmtMoney(t.amount, 2)}</td>
-    </tr>`;
-  }).join("");
-  const offCats = rows.filter(r => r.suggestion);
-  const recsHtml = offCats.length === 0 ? `<p class="dim">Nothing stands out — targets look reasonable based on ${esc(prevMonthKey)}.</p>` : `<ul>${offCats.map(r => `<li><strong>${esc(r.category.name)}:</strong> ${esc(r.suggestion)}</li>`).join("")}</ul>`;
-  return `<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<title>Budget Summary ${esc(dateRange[0])} to ${esc(dateRange[1])}</title>
-<style>
-  body { font-family: Georgia, 'Times New Roman', serif; max-width: 720px; margin: 40px auto; color: #16303F; line-height: 1.5; }
-  h1 { font-size: 22px; margin-bottom: 2px; }
-  .meta { color: #666; font-size: 13px; margin-bottom: 20px; }
-  .verdict { font-size: 18px; font-weight: bold; margin-bottom: 4px; }
-  .verdict-line { margin-bottom: 24px; font-size: 14px; }
-  h2 { font-size: 15px; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-top: 28px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
-  td, th { text-align: left; padding: 5px 6px; border-bottom: 1px solid #e5e5e5; }
-  .num { text-align: right; font-family: 'Courier New', monospace; }
-  .status { text-align: right; font-weight: 600; font-size: 12px; }
-  .dim { color: #888; }
-  ul { font-size: 13px; padding-left: 20px; }
-  li { margin-bottom: 4px; }
-  @media print { body { margin: 0.5in; } }
-</style></head>
-<body>
-  <h1>Budget Summary${accountLabel ? " — " + esc(accountLabel) : ""}</h1>
-  <div class="meta">${esc(dateRange[0])} to ${esc(dateRange[1])} &middot; Generated ${esc(new Date().toLocaleDateString())}</div>
-  <div class="verdict" style="color:${statusColor[overallStatus]}">${esc(statusLabel[overallStatus])}</div>
-  <div class="verdict-line">${fmtMoney(totalActual)} spent vs ${fmtMoney(totalTarget)} budgeted${totalTarget > 0 ? ` (${(totalActual / totalTarget * 100).toFixed(0)}%)` : ""}</div>
-  <h2>By category</h2>
-  <table><tr><th>Category</th><th class="num">Actual</th><th class="num">Target</th><th></th></tr>${catRowsHtml || '<tr><td colspan="4" class="dim">No spend in this period.</td></tr>'}</table>
-  <h2>Largest transactions this period</h2>
-  <table><tr><th>Date</th><th>Category</th><th>Note</th><th class="num">Amount</th></tr>${outlierRowsHtml || '<tr><td colspan="4" class="dim">None.</td></tr>'}</table>
-  <h2>Target adjustments worth considering (based on ${esc(prevMonthKey)} actuals)</h2>
-  ${recsHtml}
-</body></html>`;
-}
-// Stable identity for a statement row across re-renders (used to track which
-// missing/extra validation rows have already been resolved this session).
-function rowKey(r) {
-  return `${r.date}|${r.description}|${r.amount}`;
 }
 
 // Matches statement rows against the app's stored transactions (same date +/-1 day, same
@@ -1396,7 +1207,6 @@ function CategoryDonut({
 function BudgetTracker() {
   const [categories, setCategories] = useState(() => loadJSON(STORAGE_KEY_CATS, DEFAULT_CATEGORIES));
   const [transactions, setTransactions] = useState(() => loadJSON(STORAGE_KEY_TXNS, DEFAULT_TRANSACTIONS));
-  const [targetHistory, setTargetHistory] = useState(() => loadJSON(STORAGE_KEY_TARGETHIST, []));
   const [onboardingComplete, setOnboardingComplete] = useState(() => {
     const stored = loadJSON(STORAGE_KEY_ONBOARDED, null);
     if (stored !== null) return stored;
@@ -1421,10 +1231,8 @@ function BudgetTracker() {
   const validateInputRef = useRef(null);
   const [validationResult, setValidationResult] = useState(null);
   const [validationAccount, setValidationAccount] = useState("Citi");
-  const [resolvedRows, setResolvedRows] = useState({});
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const resolvingRowRef = useRef(null);
   const [fAmount, setFAmount] = useState("");
   const [fCategory, setFCategory] = useState("groceries");
   const [fDate, setFDate] = useState(todayISO());
@@ -1439,9 +1247,6 @@ function BudgetTracker() {
     saveJSON(STORAGE_KEY_CATS, categories);
   }, [categories]);
   useEffect(() => {
-    saveJSON(STORAGE_KEY_TARGETHIST, targetHistory);
-  }, [targetHistory]);
-  useEffect(() => {
     saveJSON(STORAGE_KEY_ONBOARDED, onboardingComplete);
   }, [onboardingComplete]);
   useEffect(() => {
@@ -1451,10 +1256,10 @@ function BudgetTracker() {
       return;
     }
     if (window.firestoreSave) {
-      window.firestoreSave(categories, transactions, onboardingComplete, targetHistory);
+      window.firestoreSave(categories, transactions, onboardingComplete);
       setSyncStatus("synced");
     }
-  }, [categories, transactions, onboardingComplete, targetHistory]);
+  }, [categories, transactions, onboardingComplete]);
   useEffect(() => {
     function handleData(e) {
       const detail = e.detail || {};
@@ -1462,13 +1267,12 @@ function BudgetTracker() {
       if (detail.categories) setCategories(detail.categories);
       if (detail.transactions) setTransactions(detail.transactions);
       if (typeof detail.onboardingComplete === "boolean") setOnboardingComplete(detail.onboardingComplete);
-      if (detail.targetHistory) setTargetHistory(detail.targetHistory);
       firstSyncDoneRef.current = true;
       setSyncStatus("synced");
     }
     function handleEmpty() {
       firstSyncDoneRef.current = true;
-      if (window.firestoreSave) window.firestoreSave(categories, transactions, onboardingComplete, targetHistory);
+      if (window.firestoreSave) window.firestoreSave(categories, transactions, onboardingComplete);
       setSyncStatus("synced");
     }
     function handleError() {
@@ -1497,14 +1301,14 @@ function BudgetTracker() {
     return m;
   }, [categories]);
   const totalMonthlyTarget = useMemo(() => categories.reduce((s, c) => s + c.target, 0), [categories]);
-  const otherMonthlyTarget = useMemo(() => categories.filter(c => c.id !== "mortgage" && c.id !== "aoao" && c.id !== "transfer").reduce((s, c) => s + c.target, 0), [categories]);
+  const otherMonthlyTarget = useMemo(() => categories.filter(c => c.id !== "mortgage" && c.id !== "aoao").reduce((s, c) => s + c.target, 0), [categories]);
   const {
     year,
     month
   } = viewMonth;
   const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
   const monthTxns = useMemo(() => transactions.filter(t => t.date.startsWith(monthKey)), [transactions, monthKey]);
-  const monthTotal = useMemo(() => monthTxns.filter(t => t.categoryId !== "mortgage" && t.categoryId !== "aoao" && t.categoryId !== "transfer").reduce((s, t) => s + t.amount, 0), [monthTxns]);
+  const monthTotal = useMemo(() => monthTxns.filter(t => t.categoryId !== "mortgage" && t.categoryId !== "aoao").reduce((s, t) => s + t.amount, 0), [monthTxns]);
   const now = new Date();
   const isCurrentMonth = year === now.getFullYear() && month === now.getMonth();
   const dim = daysInMonth(year, month);
@@ -1558,68 +1362,8 @@ function BudgetTracker() {
       };
       setTransactions([t, ...transactions]);
       showToast("Logged " + fmtMoney(amt, 2));
-      if (resolvingRowRef.current) {
-        const resolvedRow = resolvingRowRef.current;
-        setResolvedRows(prev => ({
-          ...prev,
-          [rowKey(resolvedRow)]: "added"
-        }));
-        resolvingRowRef.current = null;
-      }
     }
     closeForm();
-  }
-  function openResolveAddForm(row) {
-    resolvingRowRef.current = row;
-    setEditingId(null);
-    setFAmount(String(row.amount));
-    setFCategory("groceries");
-    setFDate(row.date);
-    setFNote(`${validationAccount}: ${row.description}`);
-    setFormOpen(true);
-  }
-  function resolveMissingAsTransfer(row) {
-    const t = {
-      id: "t-" + Date.now(),
-      date: row.date,
-      categoryId: "transfer",
-      amount: Math.round(row.amount * 100) / 100,
-      vendor: row.description,
-      note: `${validationAccount}: ${row.description} (credit card payment)`
-    };
-    setTransactions(prev => [t, ...prev]);
-    setResolvedRows(prev => ({
-      ...prev,
-      [rowKey(row)]: "transfer"
-    }));
-    showToast("Marked as transfer — " + fmtMoney(row.amount, 2));
-  }
-  function confirmExtraRow(t) {
-    setResolvedRows(prev => ({
-      ...prev,
-      [t.id]: "confirmed"
-    }));
-  }
-  function deleteExtraRow(t) {
-    deleteTransaction(t.id);
-    setResolvedRows(prev => ({
-      ...prev,
-      [t.id]: "deleted"
-    }));
-  }
-  function updateExtraTransaction(id, updates) {
-    setTransactions(prev => prev.map(t => t.id === id ? {
-      ...t,
-      ...updates
-    } : t));
-    showToast("Updated line item");
-  }
-  function confirmMatchRow(row, t) {
-    setResolvedRows(prev => ({
-      ...prev,
-      [rowKey(row)]: "matched"
-    }));
-    showToast("Confirmed — already logged " + fmtMoney(t.amount, 2));
   }
   function startEdit(t) {
     setEditingId(t.id);
@@ -1642,7 +1386,6 @@ function BudgetTracker() {
     setEditingId(null);
     setFAmount("");
     setFNote("");
-    resolvingRowRef.current = null;
   }
   function deleteTransaction(id) {
     setTransactions(transactions.filter(t => t.id !== id));
@@ -1653,37 +1396,6 @@ function BudgetTracker() {
       ...c,
       target: isNaN(v) ? 0 : v
     } : c));
-  }
-  function logTargetChange(categoryId, oldTarget, newTarget) {
-    if (oldTarget === newTarget || isNaN(oldTarget) || isNaN(newTarget)) return;
-    setTargetHistory(prev => [...prev, {
-      id: "th-" + Date.now() + Math.random().toString(36).slice(2, 6),
-      date: todayISO(),
-      categoryId,
-      oldTarget,
-      newTarget
-    }]);
-  }
-  function applyCategoryTargets(updates) {
-    if (!updates || updates.length === 0) return;
-    const byId = {};
-    updates.forEach(u => {
-      byId[u.id] = u.target;
-    });
-    const today = todayISO();
-    const newEntries = categories.filter(c => byId.hasOwnProperty(c.id) && byId[c.id] !== c.target).map(c => ({
-      id: "th-" + Date.now() + Math.random().toString(36).slice(2, 6) + "-" + c.id,
-      date: today,
-      categoryId: c.id,
-      oldTarget: c.target,
-      newTarget: byId[c.id]
-    }));
-    setCategories(categories.map(c => byId.hasOwnProperty(c.id) ? {
-      ...c,
-      target: byId[c.id]
-    } : c));
-    if (newEntries.length > 0) setTargetHistory(prev => [...prev, ...newEntries]);
-    showToast(`Applied ${updates.length} target ${updates.length === 1 ? "adjustment" : "adjustments"}`);
   }
   function exportData() {
     const payload = {
@@ -1753,7 +1465,6 @@ function BudgetTracker() {
           ...result,
           accountLabel
         });
-        setResolvedRows({});
         showToast(`Checked ${result.rowCount} statement rows against the log`);
       } catch (err) {
         showToast("Couldn't read that file — is it a CSV?");
@@ -1773,7 +1484,7 @@ function BudgetTracker() {
   const trendData = useMemo(() => {
     const byMonth = {};
     transactions.forEach(t => {
-      if (t.categoryId === "mortgage" || t.categoryId === "aoao" || t.categoryId === "transfer") return;
+      if (t.categoryId === "mortgage" || t.categoryId === "aoao") return;
       const key = t.date.slice(0, 7);
       byMonth[key] = (byMonth[key] || 0) + t.amount;
     });
@@ -1788,7 +1499,7 @@ function BudgetTracker() {
   }, [transactions, otherMonthlyTarget]);
   const PIE_COLORS = [COLORS.teal, COLORS.brass, COLORS.coral, "#8FA6B0", "#B98E4A", "#4A8C82", "#C97A6C", "#5A7A8C"];
   const pieData = useMemo(() => {
-    return categories.filter(c => c.id !== "mortgage" && c.id !== "aoao" && c.id !== "transfer" && categorySpend[c.id] > 0).map(c => ({
+    return categories.filter(c => c.id !== "mortgage" && c.id !== "aoao" && categorySpend[c.id] > 0).map(c => ({
       name: c.name,
       value: Math.round(categorySpend[c.id] * 100) / 100
     })).sort((a, b) => b.value - a.value).slice(0, 8);
@@ -2013,13 +1724,9 @@ function BudgetTracker() {
     startEdit: startEdit
   }), tab === "log" && /*#__PURE__*/React.createElement(LogView, {
     transactions: transactions,
-    monthTxns: monthTxns,
     catById: catById,
     deleteTransaction: deleteTransaction,
-    startEdit: startEdit,
-    year: year,
-    month: month,
-    shiftMonth: shiftMonth
+    startEdit: startEdit
   }), tab === "vendors" && /*#__PURE__*/React.createElement(VendorsView, {
     year: year,
     month: month,
@@ -2031,36 +1738,18 @@ function BudgetTracker() {
     categories: categories,
     categorySpend: categorySpend,
     updateCategoryTarget: updateCategoryTarget,
-    totalMonthlyTarget: totalMonthlyTarget,
-    logTargetChange: logTargetChange,
-    year: year,
-    month: month,
-    shiftMonth: shiftMonth
+    totalMonthlyTarget: totalMonthlyTarget
   }), tab === "trends" && /*#__PURE__*/React.createElement(TrendsView, {
     trendData: trendData,
     pieData: pieData,
     PIE_COLORS: PIE_COLORS,
-    otherMonthlyTarget: otherMonthlyTarget,
-    targetHistory: targetHistory,
-    catById: catById
+    otherMonthlyTarget: otherMonthlyTarget
   }), tab === "validate" && /*#__PURE__*/React.createElement(ValidateView, {
     validateInputRef: validateInputRef,
     validationAccount: validationAccount,
     setValidationAccount: setValidationAccount,
     validationResult: validationResult,
-    onFileChosen: file => validateStatementFile(file, validationAccount),
-    resolvedRows: resolvedRows,
-    onAddToLog: openResolveAddForm,
-    onMarkTransfer: resolveMissingAsTransfer,
-    onEditExtra: startEdit,
-    onConfirmExtra: confirmExtraRow,
-    onDeleteExtra: deleteExtraRow,
-    onUpdateExtra: updateExtraTransaction,
-    onConfirmMatch: confirmMatchRow,
-    onApplySuggestions: applyCategoryTargets,
-    catById: catById,
-    categories: categories,
-    transactions: transactions
+    onFileChosen: file => validateStatementFile(file, validationAccount)
   }))), formOpen && /*#__PURE__*/React.createElement(QuickAddModal, {
     onClose: closeForm,
     onSubmit: submitTransaction,
@@ -2355,78 +2044,15 @@ function EmptyState({
 }
 function LogView({
   transactions,
-  monthTxns,
   catById,
   deleteTransaction,
-  startEdit,
-  year,
-  month,
-  shiftMonth
+  startEdit
 }) {
   const [filter, setFilter] = useState("all");
-  const [scope, setScope] = useState("month");
-  const base = scope === "month" ? monthTxns : transactions;
-  const sorted = [...base].sort((a, b) => b.date.localeCompare(a.date));
+  const sorted = [...transactions].sort((a, b) => b.date.localeCompare(a.date));
   const filtered = filter === "all" ? sorted : sorted.filter(t => t.categoryId === filter);
-  const filteredTotal = filtered.reduce((s, t) => s + t.amount, 0);
   const cats = Object.values(catById);
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      marginBottom: "10px"
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setScope("month"),
-    style: {
-      background: scope === "month" ? COLORS.teal : "none",
-      color: scope === "month" ? COLORS.ink : COLORS.paperDim,
-      border: `1px solid ${scope === "month" ? COLORS.teal : COLORS.line}`,
-      borderRadius: "6px",
-      padding: "5px 10px",
-      fontSize: "12px",
-      fontWeight: 600
-    }
-  }, "This month"), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setScope("all"),
-    style: {
-      background: scope === "all" ? COLORS.teal : "none",
-      color: scope === "all" ? COLORS.ink : COLORS.paperDim,
-      border: `1px solid ${scope === "all" ? COLORS.teal : COLORS.line}`,
-      borderRadius: "6px",
-      padding: "5px 10px",
-      fontSize: "12px",
-      fontWeight: 600
-    }
-  }, "All time"), scope === "month" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
-    onClick: () => shiftMonth(-1),
-    style: {
-      background: "none",
-      border: "none",
-      color: COLORS.paperDim,
-      padding: "4px"
-    }
-  }, /*#__PURE__*/React.createElement(ChevLeft, {
-    size: 16
-  })), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paper,
-      fontSize: "13px",
-      fontWeight: 600,
-      letterSpacing: "1px"
-    }
-  }, MONTH_NAMES[month].toUpperCase(), " ", year), /*#__PURE__*/React.createElement("button", {
-    onClick: () => shiftMonth(1),
-    style: {
-      background: "none",
-      border: "none",
-      color: COLORS.paperDim,
-      padding: "4px"
-    }
-  }, /*#__PURE__*/React.createElement(ChevRight, {
-    size: 16
-  })))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -2440,7 +2066,7 @@ function LogView({
       fontSize: "15px",
       fontWeight: 600
     }
-  }, filter === "all" ? "Log" : (catById[filter] ? catById[filter].name : filter), " (", filtered.length, ") — ", fmtMoney(filteredTotal)), /*#__PURE__*/React.createElement("select", {
+  }, "Full log (", filtered.length, ")"), /*#__PURE__*/React.createElement("select", {
     value: filter,
     onChange: e => setFilter(e.target.value),
     style: {
@@ -2476,55 +2102,10 @@ function CategoriesView({
   categories,
   categorySpend,
   updateCategoryTarget,
-  totalMonthlyTarget,
-  logTargetChange,
-  year,
-  month,
-  shiftMonth
+  totalMonthlyTarget
 }) {
-  const realCats = categories.filter(c => c.id !== "transfer");
-  const editStartRef = useRef({});
+  const realCats = categories;
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      marginBottom: "12px"
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => shiftMonth(-1),
-    style: {
-      background: "none",
-      border: "none",
-      color: COLORS.paperDim,
-      padding: "4px"
-    }
-  }, /*#__PURE__*/React.createElement(ChevLeft, {
-    size: 16
-  })), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paper,
-      fontSize: "13px",
-      fontWeight: 600,
-      letterSpacing: "1px"
-    }
-  }, MONTH_NAMES[month].toUpperCase(), " ", year), /*#__PURE__*/React.createElement("button", {
-    onClick: () => shiftMonth(1),
-    style: {
-      background: "none",
-      border: "none",
-      color: COLORS.paperDim,
-      padding: "4px"
-    }
-  }, /*#__PURE__*/React.createElement(ChevRight, {
-    size: 16
-  })), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paperDim,
-      fontSize: "12px",
-      marginLeft: "4px"
-    }
-  }, "— the \"actual\" figures below are spend logged in this month only")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -2621,15 +2202,7 @@ function CategoriesView({
       type: "number",
       value: c.target,
       step: "0.01",
-      onFocus: () => {
-        editStartRef.current[c.id] = c.target;
-      },
       onChange: e => updateCategoryTarget(c.id, e.target.value),
-      onBlur: () => {
-        const start = editStartRef.current[c.id];
-        if (typeof start === "number" && logTargetChange) logTargetChange(c.id, start, c.target);
-        delete editStartRef.current[c.id];
-      },
       style: {
         background: COLORS.panel,
         color: COLORS.paper,
@@ -2800,11 +2373,9 @@ function TrendsView({
   trendData,
   pieData,
   PIE_COLORS,
-  otherMonthlyTarget,
-  targetHistory,
-  catById
+  otherMonthlyTarget
 }) {
-  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
       gridTemplateColumns: window.innerWidth > 900 ? "3fr 2fr" : "1fr",
@@ -2928,120 +2499,16 @@ function TrendsView({
       fontFamily: FONT_MONO,
       flexShrink: 0
     }
-  }, fmtMoney(d.value, 0))))))), /*#__PURE__*/React.createElement(TargetHistorySection, {
-    targetHistory: targetHistory,
-    catById: catById
-  })));
-}
-function TargetHistorySection({
-  targetHistory,
-  catById
-}) {
-  const byCategory = {};
-  (targetHistory || []).forEach(h => {
-    if (!byCategory[h.categoryId]) byCategory[h.categoryId] = [];
-    byCategory[h.categoryId].push(h);
-  });
-  const catIds = Object.keys(byCategory).sort((a, b) => {
-    const nameA = catById && catById[a] ? catById[a].name : a;
-    const nameB = catById && catById[b] ? catById[b].name : b;
-    return nameA.localeCompare(nameB);
-  });
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: "28px"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: COLORS.paper,
-      fontFamily: FONT_DISPLAY,
-      fontSize: "15px",
-      fontWeight: 600,
-      marginBottom: "4px"
-    }
-  }, "Budget target history"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: COLORS.paperDim,
-      fontSize: "12px",
-      marginBottom: "14px"
-    }
-  }, "Tracks target changes from here on — manual edits and accepted budget-summary adjustments both get logged."), catIds.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
-    text: "No target changes recorded yet. Edit a category target, or accept adjustments from a budget summary, to start building history."
-  }) : /*#__PURE__*/React.createElement("div", null, catIds.map(catId => {
-    const cat = catById ? catById[catId] : null;
-    const entries = [...byCategory[catId]].sort((a, b) => a.date.localeCompare(b.date));
-    return /*#__PURE__*/React.createElement("div", {
-      key: catId,
-      style: {
-        borderBottom: `1px solid ${COLORS.line}`,
-        padding: "10px 0"
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        color: COLORS.paper,
-        fontSize: "13.5px",
-        fontWeight: 600,
-        marginBottom: "6px"
-      }
-    }, cat ? cat.name : catId), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        flexWrap: "wrap",
-        gap: "6px 16px"
-      }
-    }, entries.map((h, i) => /*#__PURE__*/React.createElement("span", {
-      key: i,
-      style: {
-        color: COLORS.paperDim,
-        fontSize: "12px",
-        fontFamily: FONT_MONO,
-        whiteSpace: "nowrap"
-      }
-    }, h.date, ": ", fmtMoney(h.oldTarget, 0), " ", "\u2192", " ", /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: h.newTarget > h.oldTarget ? COLORS.coral : COLORS.teal
-      }
-    }, fmtMoney(h.newTarget, 0))))));
-  })));
+  }, fmtMoney(d.value, 0))))))));
 }
 function ValidateView({
   validateInputRef,
   validationAccount,
   setValidationAccount,
   validationResult,
-  onFileChosen,
-  resolvedRows,
-  onAddToLog,
-  onMarkTransfer,
-  onEditExtra,
-  onConfirmExtra,
-  onDeleteExtra,
-  onUpdateExtra,
-  onConfirmMatch,
-  onApplySuggestions,
-  catById,
-  categories,
-  transactions
+  onFileChosen
 }) {
   const ACCOUNTS = ["Citi", "FHB Checking", "Chase ...3154", "Chase ...1323", "Apple Cash"];
-  const [showSummary, setShowSummary] = useState(false);
-  const budgetSummary = useMemo(() => validationResult ? computeBudgetSummary(validationResult.dateRange, transactions, categories) : null, [validationResult, transactions, categories]);
-  function exportSummaryDoc() {
-    if (!budgetSummary) return;
-    const html = buildSummaryHTML(budgetSummary, catById, validationAccount);
-    const blob = new Blob([html], {
-      type: "text/html"
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const [start] = budgetSummary.dateRange;
-    a.href = url;
-    a.download = `budget-summary-${start}.html`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       color: COLORS.paper,
@@ -3103,7 +2570,7 @@ function ValidateView({
   }), " Choose statement CSV"), /*#__PURE__*/React.createElement("input", {
     ref: validateInputRef,
     type: "file",
-    accept: ".csv,text/csv",
+   
     style: {
       display: "none"
     },
@@ -3114,422 +2581,11 @@ function ValidateView({
   })), !validationResult ? /*#__PURE__*/React.createElement(EmptyState, {
     text: "No statement checked yet. Choose a CSV above to run a validation pass."
   }) : /*#__PURE__*/React.createElement(ValidationReport, {
-    result: validationResult,
-    resolvedRows: resolvedRows,
-    onAddToLog: onAddToLog,
-    onMarkTransfer: onMarkTransfer,
-    onEditExtra: onEditExtra,
-    onConfirmExtra: onConfirmExtra,
-    onDeleteExtra: onDeleteExtra,
-    onUpdateExtra: onUpdateExtra,
-    onConfirmMatch: onConfirmMatch,
-    catById: catById,
-    categories: categories,
-    transactions: transactions
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: "18px"
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setShowSummary(s => !s),
-    style: {
-      background: "none",
-      color: COLORS.brass,
-      border: `1px solid ${COLORS.brass}`,
-      borderRadius: "6px",
-      padding: "8px 14px",
-      fontWeight: 600,
-      fontSize: "13px"
-    }
-  }, showSummary ? "Hide budget summary" : "Generate budget summary"), showSummary && budgetSummary && /*#__PURE__*/React.createElement("button", {
-    onClick: exportSummaryDoc,
-    style: {
-      background: "none",
-      color: COLORS.paper,
-      border: `1px solid ${COLORS.line}`,
-      borderRadius: "6px",
-      padding: "8px 14px",
-      fontWeight: 600,
-      fontSize: "13px",
-      marginLeft: "8px"
-    }
-  }, /*#__PURE__*/React.createElement(DownloadIcon, {
-    size: 14
-  }), " Export as document"), showSummary && budgetSummary && /*#__PURE__*/React.createElement(BudgetSummaryPanel, {
-    summary: budgetSummary,
-    catById: catById,
-    onApplySuggestions: onApplySuggestions
-  })));
-}
-function BudgetSummaryPanel({
-  summary,
-  catById,
-  onApplySuggestions
-}) {
-  const {
-    dateRange,
-    prevMonthKey,
-    rows,
-    totalActual,
-    totalTarget,
-    overallStatus,
-    outliers
-  } = summary;
-  const statusColor = {
-    over: COLORS.coral,
-    under: COLORS.teal,
-    "on track": COLORS.brass,
-    "no targets set": COLORS.paperDim
-  };
-  const statusLabel = {
-    over: "Over budget",
-    under: "Under budget",
-    "on track": "On track",
-    "no targets set": "No targets set for these categories"
-  };
-  const offCats = rows.filter(r => r.suggestion);
-  const actionableCats = offCats.filter(r => r.actionable);
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: "12px",
-      background: COLORS.panel,
-      border: `1px solid ${COLORS.line}`,
-      borderRadius: "8px",
-      padding: "16px"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: COLORS.paperDim,
-      fontSize: "11px",
-      marginBottom: "4px",
-      textTransform: "uppercase",
-      letterSpacing: "0.03em"
-    }
-  }, dateRange[0], " to ", dateRange[1]), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "baseline",
-      gap: "10px",
-      marginBottom: "14px",
-      flexWrap: "wrap"
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: statusColor[overallStatus],
-      fontFamily: FONT_DISPLAY,
-      fontSize: "18px",
-      fontWeight: 700
-    }
-  }, statusLabel[overallStatus]), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paper,
-      fontFamily: FONT_MONO,
-      fontSize: "13px"
-    }
-  }, fmtMoney(totalActual), " spent vs ", fmtMoney(totalTarget), " budgeted", totalTarget > 0 ? ` (${(totalActual / totalTarget * 100).toFixed(0)}%)` : "")),
-  // Per-category breakdown
-  /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: COLORS.paper,
-      fontFamily: FONT_DISPLAY,
-      fontSize: "13px",
-      fontWeight: 600,
-      marginBottom: "8px"
-    }
-  }, "By category"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginBottom: "16px"
-    }
-  }, rows.length === 0 ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: COLORS.paperDim,
-      fontSize: "12px"
-    }
-  }, "No spend in this period.") : rows.map(r => /*#__PURE__*/React.createElement("div", {
-    key: r.category.id,
-    style: {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      gap: "10px",
-      padding: "5px 0",
-      borderBottom: `1px solid ${COLORS.line}`,
-      fontSize: "12.5px"
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paper,
-      minWidth: 0,
-      flex: 1,
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-      whiteSpace: "nowrap"
-    }
-  }, r.category.name, " ", /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paperDim
-    }
-  }, "(", r.count, ")")), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paperDim,
-      fontFamily: FONT_MONO,
-      flexShrink: 0
-    }
-  }, fmtMoney(r.actual), r.target > 0 ? ` / ${fmtMoney(r.target)}` : ""), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: statusColor[r.status],
-      fontSize: "11px",
-      fontWeight: 600,
-      flexShrink: 0,
-      minWidth: "70px",
-      textAlign: "right"
-    }
-  }, statusLabel[r.status])))),
-  // Outliers
-  outliers.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: COLORS.paper,
-      fontFamily: FONT_DISPLAY,
-      fontSize: "13px",
-      fontWeight: 600,
-      marginBottom: "8px"
-    }
-  }, "Largest transactions this period"), outliers.map((t, i) => {
-    const cat = catById ? catById[t.categoryId] : null;
-    return /*#__PURE__*/React.createElement("div", {
-      key: i,
-      style: {
-        display: "flex",
-        justifyContent: "space-between",
-        gap: "10px",
-        padding: "4px 0",
-        fontSize: "12.5px"
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: COLORS.paper,
-        minWidth: 0,
-        flex: 1,
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap"
-      }
-    }, t.date, " · ", cat ? cat.name : t.categoryId, " · ", t.note || t.vendor || ""), /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: COLORS.paper,
-        fontFamily: FONT_MONO,
-        flexShrink: 0
-      }
-    }, fmtMoney(t.amount, 2)));
-  })),
-  // Recommendations
-  /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: "16px"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      marginBottom: "8px",
-      gap: "10px",
-      flexWrap: "wrap"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: COLORS.paper,
-      fontFamily: FONT_DISPLAY,
-      fontSize: "13px",
-      fontWeight: 600
-    }
-  }, "Target adjustments worth considering ", /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paperDim,
-      fontWeight: 400,
-      fontSize: "11px"
-    }
-  }, "(based on ", prevMonthKey, " actuals)")), actionableCats.length > 0 && onApplySuggestions && /*#__PURE__*/React.createElement(ResolveButton, {
-    variant: "add",
-    onClick: () => onApplySuggestions(actionableCats.map(r => ({
-      id: r.category.id,
-      target: r.suggestedTarget
-    })))
-  }, "Accept all adjustments")), offCats.length === 0 ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: COLORS.paperDim,
-      fontSize: "12px"
-    }
-  }, "Nothing stands out — targets look reasonable based on ", prevMonthKey, ".") : offCats.map(r => /*#__PURE__*/React.createElement("div", {
-    key: r.category.id,
-    style: {
-      color: r.actionable ? COLORS.paperDim : COLORS.brass,
-      fontSize: "12.5px",
-      padding: "3px 0"
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: COLORS.paper,
-      fontWeight: 600
-    }
-  }, r.category.name), ": ", r.suggestion))));
-}
-function ResolveButton({
-  onClick,
-  children,
-  variant
-}) {
-  const styles = {
-    add: {
-      background: COLORS.teal,
-      color: COLORS.ink
-    },
-    transfer: {
-      background: COLORS.panelLight,
-      color: COLORS.paper,
-      border: `1px solid ${COLORS.brass}`
-    },
-    edit: {
-      background: COLORS.panelLight,
-      color: COLORS.paper,
-      border: `1px solid ${COLORS.line}`
-    },
-    danger: {
-      background: "none",
-      color: COLORS.coral,
-      border: `1px solid ${COLORS.coral}`
-    },
-    ghost: {
-      background: "none",
-      color: COLORS.paperDim,
-      border: `1px solid ${COLORS.line}`
-    }
-  };
-  return /*#__PURE__*/React.createElement("button", {
-    onClick,
-    style: {
-      ...styles[variant],
-      fontSize: "11px",
-      fontWeight: 600,
-      borderRadius: "5px",
-      padding: "4px 9px",
-      whiteSpace: "nowrap",
-      flexShrink: 0
-    }
-  }, children);
-}
-function FindInLogPanel({
-  row,
-  transactions,
-  catById,
-  query,
-  setQuery,
-  onConfirm
-}) {
-  const q = query.trim().toLowerCase();
-  const candidates = useMemo(() => {
-    const rowDate = new Date(row.date);
-    const scored = (transactions || []).map(t => {
-      const dayDiff = Math.abs((new Date(t.date) - rowDate) / 86400000);
-      const amountDiff = Math.abs(t.amount - row.amount);
-      const text = `${t.note || ""} ${t.vendor || ""}`.toLowerCase();
-      const matchesQuery = q ? text.includes(q) : true;
-      return {
-        t,
-        dayDiff,
-        amountDiff,
-        matchesQuery
-      };
-    }).filter(c => c.matchesQuery && (q ? true : c.dayDiff <= 20));
-    scored.sort((a, b) => a.amountDiff - b.amountDiff || a.dayDiff - b.dayDiff);
-    return scored.slice(0, 8);
-  }, [transactions, row, q]);
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: COLORS.ink,
-      border: `1px solid ${COLORS.line}`,
-      borderRadius: "6px",
-      padding: "10px",
-      marginBottom: "10px"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: COLORS.paperDim,
-      fontSize: "11px",
-      marginBottom: "8px"
-    }
-  }, "Searching for a log entry that matches ", r_amount(row), " on ", row.date, ". Showing closest matches by amount and date — filter by payee/note below."), /*#__PURE__*/React.createElement("input", {
-    type: "text",
-    value: query,
-    onChange: e => setQuery(e.target.value),
-    placeholder: "Filter by payee or note (optional)",
-    style: {
-      background: COLORS.panel,
-      color: COLORS.paper,
-      border: `1px solid ${COLORS.line}`,
-      borderRadius: "5px",
-      padding: "6px 8px",
-      fontSize: "12.5px",
-      width: "100%",
-      marginBottom: "8px"
-    }
-  }), candidates.length === 0 ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: COLORS.paperDim,
-      fontSize: "12px",
-      padding: "6px 0"
-    }
-  }, "No log entries found nearby. It may genuinely be unlogged — use \"Add to log\" instead.") : candidates.map(c => {
-    const cat = catById ? catById[c.t.categoryId] : null;
-    const closeAmount = c.amountDiff < 0.01;
-    return /*#__PURE__*/React.createElement("div", {
-      key: c.t.id,
-      style: {
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: "10px",
-        padding: "6px 0",
-        borderTop: `1px solid ${COLORS.line}`,
-        fontSize: "12px"
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: COLORS.paper,
-        minWidth: 0,
-        flex: 1,
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap"
-      }
-    }, c.t.date, " · ", cat ? cat.name : c.t.categoryId, " · ", c.t.note || c.t.vendor || ""), /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: closeAmount ? COLORS.teal : COLORS.paper,
-        fontFamily: FONT_MONO,
-        flexShrink: 0
-      }
-    }, fmtMoney(c.t.amount, 2)), /*#__PURE__*/React.createElement(ResolveButton, {
-      variant: "add",
-      onClick: () => onConfirm(c.t)
-    }, "This is it"));
+    result: validationResult
   }));
 }
-function r_amount(row) {
-  return fmtMoney(row.amount, 2);
-}
 function ValidationReport({
-  result,
-  resolvedRows,
-  onAddToLog,
-  onMarkTransfer,
-  onEditExtra,
-  onConfirmExtra,
-  onDeleteExtra,
-  onUpdateExtra,
-  onConfirmMatch,
-  catById,
-  categories,
-  transactions
+  result
 }) {
   const {
     matched,
@@ -3544,50 +2600,6 @@ function ValidationReport({
     accountLabel
   } = result;
   const clean = missing.length === 0 && extra.length === 0;
-  const resolved = resolvedRows || {};
-  const [expandedId, setExpandedId] = useState(null);
-  const [editBuffer, setEditBuffer] = useState(null);
-  const [searchKey, setSearchKey] = useState(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [vendorFilter, setVendorFilter] = useState("");
-  const vq = vendorFilter.trim().toLowerCase();
-  const filteredMissing = vq ? missing.filter(r => (r.description || "").toLowerCase().includes(vq)) : missing;
-  const filteredExtra = vq ? extra.filter(t => `${t.note || ""} ${t.vendor || ""}`.toLowerCase().includes(vq)) : extra;
-  function toggleSearch(r) {
-    const key = rowKey(r);
-    if (searchKey === key) {
-      setSearchKey(null);
-      setSearchQuery("");
-    } else {
-      setSearchKey(key);
-      setSearchQuery("");
-    }
-  }
-  function toggleExpand(t) {
-    if (expandedId === t.id) {
-      setExpandedId(null);
-      setEditBuffer(null);
-    } else {
-      setExpandedId(t.id);
-      setEditBuffer({
-        date: t.date,
-        categoryId: t.categoryId,
-        amount: String(t.amount),
-        note: t.note || t.vendor || ""
-      });
-    }
-  }
-  function saveExpanded(t) {
-    const amt = parseFloat(editBuffer.amount);
-    onUpdateExtra(t.id, {
-      date: editBuffer.date,
-      categoryId: editBuffer.categoryId,
-      amount: isNaN(amt) ? t.amount : Math.round(amt * 100) / 100,
-      note: editBuffer.note.trim()
-    });
-    setExpandedId(null);
-    setEditBuffer(null);
-  }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       background: clean ? COLORS.panel : COLORS.panel,
@@ -3633,22 +2645,36 @@ function ValidationReport({
     style: {
       color: COLORS.coral
     }
-  }, extra.length, " logged but not on the statement"), " (", fmtMoney(extraTotal, 2), ")"), ".")), (missing.length > 0 || extra.length > 0) && /*#__PURE__*/React.createElement("input", {
-    type: "text",
-    value: vendorFilter,
-    onChange: e => setVendorFilter(e.target.value),
-    placeholder: "Filter by vendor/payee (e.g. Menehune, Kilauea)...",
+  }, extra.length, " logged but not on the statement"), " (", fmtMoney(extraTotal, 2), ")"), ".")), missing.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
-      background: COLORS.panel,
+      marginBottom: "18px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: COLORS.coral,
+      fontSize: "13px",
+      fontWeight: 600,
+      marginBottom: "8px"
+    }
+  }, "On the statement, not in the log (", missing.length, ")"), missing.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      padding: "6px 0",
+      borderBottom: `1px solid ${COLORS.line}`,
+      fontSize: "12.5px"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: COLORS.paper
+    }
+  }, r.date, " · ", r.description), /*#__PURE__*/React.createElement("span", {
+    style: {
       color: COLORS.paper,
-      border: `1px solid ${COLORS.line}`,
-      borderRadius: "6px",
-      padding: "8px 10px",
-      fontSize: "13px",
-      width: "100%",
-      marginBottom: "18px"
+      fontFamily: FONT_MONO
     }
-  }), missing.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, fmtMoney(r.amount, 2))))), extra.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: "18px"
     }
@@ -3659,267 +2685,25 @@ function ValidationReport({
       fontWeight: 600,
       marginBottom: "8px"
     }
-  }, "On the statement, not in the log (", vq ? `${filteredMissing.length} of ${missing.length}` : missing.length, ")"), vq && filteredMissing.length === 0 && /*#__PURE__*/React.createElement("div", {
+  }, "In the log, not on the statement (", extra.length, ")"), extra.map((t, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
     style: {
-      color: COLORS.paperDim,
-      fontSize: "12px"
+      display: "flex",
+      justifyContent: "space-between",
+      padding: "6px 0",
+      borderBottom: `1px solid ${COLORS.line}`,
+      fontSize: "12.5px"
     }
-  }, "No matches for \"", vendorFilter, "\"."), filteredMissing.map((r, i) => {
-    const state = resolved[rowKey(r)];
-    const isSearching = !state && searchKey === rowKey(r);
-    return /*#__PURE__*/React.createElement("div", {
-      key: i,
-      style: {
-        borderBottom: `1px solid ${COLORS.line}`,
-        opacity: state ? 0.55 : 1
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: "10px",
-        padding: "6px 0",
-        fontSize: "12.5px"
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: COLORS.paper,
-        minWidth: 0,
-        flex: 1,
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap"
-      }
-    }, r.date, " · ", r.description), /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: COLORS.paper,
-        fontFamily: FONT_MONO,
-        flexShrink: 0
-      }
-    }, fmtMoney(r.amount, 2)), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        gap: "6px",
-        flexShrink: 0
-      }
-    }, state ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: COLORS.teal,
-        fontSize: "11px",
-        fontWeight: 600
-      }
-    }, state === "added" ? "✓ Logged" : state === "transfer" ? "↔ Transfer" : "✓ Already logged") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ResolveButton, {
-      variant: "add",
-      onClick: () => onAddToLog(r)
-    }, "Add to log"), /*#__PURE__*/React.createElement(ResolveButton, {
-      variant: "transfer",
-      onClick: () => onMarkTransfer(r)
-    }, "CC payment"), /*#__PURE__*/React.createElement(ResolveButton, {
-      variant: "edit",
-      onClick: () => toggleSearch(r)
-    }, isSearching ? "Close" : "Find in log")))), isSearching && /*#__PURE__*/React.createElement(FindInLogPanel, {
-      row: r,
-      transactions: transactions,
-      catById: catById,
-      query: searchQuery,
-      setQuery: setSearchQuery,
-      onConfirm: t => {
-        onConfirmMatch(r, t);
-        setSearchKey(null);
-        setSearchQuery("");
-      }
-    }));
-  })), extra.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("span", {
     style: {
-      marginBottom: "18px"
+      color: COLORS.paper
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, t.date, " · ", t.note || t.vendor), /*#__PURE__*/React.createElement("span", {
     style: {
-      color: COLORS.coral,
-      fontSize: "13px",
-      fontWeight: 600,
-      marginBottom: "8px"
+      color: COLORS.paper,
+      fontFamily: FONT_MONO
     }
-  }, "In the log, not on the statement (", vq ? `${filteredExtra.length} of ${extra.length}` : extra.length, ")"), vq && filteredExtra.length === 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: COLORS.paperDim,
-      fontSize: "12px"
-    }
-  }, "No matches for \"", vendorFilter, "\"."), filteredExtra.map((t, i) => {
-    const state = resolved[t.id];
-    const isOpen = expandedId === t.id;
-    const cat = catById ? catById[t.categoryId] : null;
-    return /*#__PURE__*/React.createElement("div", {
-      key: i,
-      style: {
-        borderBottom: `1px solid ${COLORS.line}`,
-        opacity: state ? 0.55 : 1
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      onClick: () => !state && toggleExpand(t),
-      style: {
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: "10px",
-        padding: "6px 0",
-        fontSize: "12.5px",
-        cursor: state ? "default" : "pointer"
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: COLORS.paper,
-        minWidth: 0,
-        flex: 1,
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap"
-      }
-    }, t.date, " · ", cat ? cat.name : t.categoryId, " · ", t.note || t.vendor || ""), /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: COLORS.paper,
-        fontFamily: FONT_MONO,
-        flexShrink: 0
-      }
-    }, fmtMoney(t.amount, 2)), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        gap: "6px",
-        flexShrink: 0
-      },
-      onClick: e => e.stopPropagation()
-    }, state ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: state === "deleted" ? COLORS.coral : COLORS.teal,
-        fontSize: "11px",
-        fontWeight: 600
-      }
-    }, state === "deleted" ? "Deleted" : "Confirmed") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ResolveButton, {
-      variant: "edit",
-      onClick: () => toggleExpand(t)
-    }, isOpen ? "Close" : "Details"), /*#__PURE__*/React.createElement(ResolveButton, {
-      variant: "ghost",
-      onClick: () => onConfirmExtra(t)
-    }, "Confirm"), /*#__PURE__*/React.createElement(ResolveButton, {
-      variant: "danger",
-      onClick: () => onDeleteExtra(t)
-    }, "Delete")))), isOpen && editBuffer && /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        flexWrap: "wrap",
-        gap: "8px",
-        alignItems: "flex-end",
-        background: COLORS.ink,
-        border: `1px solid ${COLORS.line}`,
-        borderRadius: "6px",
-        padding: "10px",
-        marginBottom: "10px"
-      }
-    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-      style: {
-        color: COLORS.paperDim,
-        fontSize: "10px",
-        marginBottom: "3px",
-        textTransform: "uppercase"
-      }
-    }, "Date"), /*#__PURE__*/React.createElement("input", {
-      type: "date",
-      value: editBuffer.date,
-      onChange: e => setEditBuffer({
-        ...editBuffer,
-        date: e.target.value
-      }),
-      style: {
-        background: COLORS.panel,
-        color: COLORS.paper,
-        border: `1px solid ${COLORS.line}`,
-        borderRadius: "5px",
-        padding: "6px 8px",
-        fontSize: "12.5px"
-      }
-    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-      style: {
-        color: COLORS.paperDim,
-        fontSize: "10px",
-        marginBottom: "3px",
-        textTransform: "uppercase"
-      }
-    }, "Category"), /*#__PURE__*/React.createElement("select", {
-      value: editBuffer.categoryId,
-      onChange: e => setEditBuffer({
-        ...editBuffer,
-        categoryId: e.target.value
-      }),
-      style: {
-        background: COLORS.panel,
-        color: COLORS.paper,
-        border: `1px solid ${COLORS.line}`,
-        borderRadius: "5px",
-        padding: "6px 8px",
-        fontSize: "12.5px"
-      }
-    }, (categories || []).map(c => /*#__PURE__*/React.createElement("option", {
-      key: c.id,
-      value: c.id
-    }, c.name)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-      style: {
-        color: COLORS.paperDim,
-        fontSize: "10px",
-        marginBottom: "3px",
-        textTransform: "uppercase"
-      }
-    }, "Amount"), /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      step: "0.01",
-      value: editBuffer.amount,
-      onChange: e => setEditBuffer({
-        ...editBuffer,
-        amount: e.target.value
-      }),
-      style: {
-        background: COLORS.panel,
-        color: COLORS.paper,
-        border: `1px solid ${COLORS.line}`,
-        borderRadius: "5px",
-        padding: "6px 8px",
-        fontSize: "12.5px",
-        width: "90px",
-        fontFamily: FONT_MONO
-      }
-    })), /*#__PURE__*/React.createElement("div", {
-      style: {
-        flex: "1 1 140px",
-        minWidth: "140px"
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        color: COLORS.paperDim,
-        fontSize: "10px",
-        marginBottom: "3px",
-        textTransform: "uppercase"
-      }
-    }, "Note"), /*#__PURE__*/React.createElement("input", {
-      type: "text",
-      value: editBuffer.note,
-      onChange: e => setEditBuffer({
-        ...editBuffer,
-        note: e.target.value
-      }),
-      style: {
-        background: COLORS.panel,
-        color: COLORS.paper,
-        border: `1px solid ${COLORS.line}`,
-        borderRadius: "5px",
-        padding: "6px 8px",
-        fontSize: "12.5px",
-        width: "100%"
-      }
-    })), /*#__PURE__*/React.createElement(ResolveButton, {
-      variant: "add",
-      onClick: () => saveExpanded(t)
-    }, "Save")));
-  })), clean && /*#__PURE__*/React.createElement("div", {
+  }, fmtMoney(t.amount, 2))))), clean && /*#__PURE__*/React.createElement("div", {
     style: {
       color: COLORS.teal,
       fontSize: "13px"
@@ -4279,7 +3063,7 @@ function OnboardingWizard({
     return shell("Import spending history", "Upload a CSV export from your bank or card. Works with Chase, First Hawaiian Bank, or a generic Date / Description / Amount export.", /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("input", {
       ref: fileInputRef,
       type: "file",
-      accept: ".csv,text/csv",
+     
       onChange: handleFile,
       style: {
         color: COLORS.paper,
@@ -4498,66 +3282,7 @@ function AuthGate() {
     }
   }, "Sign in with Google"));
 }
-class ErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = {
-      error: null
-    };
-  }
-  static getDerivedStateFromError(error) {
-    return {
-      error
-    };
-  }
-  componentDidCatch(error, info) {
-    this.setState({
-      error,
-      info
-    });
-  }
-  render() {
-    if (this.state.error) {
-      return /*#__PURE__*/React.createElement("div", {
-        style: {
-          background: "#10202E",
-          color: "#F2E9DC",
-          fontFamily: "monospace",
-          minHeight: "100vh",
-          padding: "24px",
-          whiteSpace: "pre-wrap",
-          fontSize: "13px",
-          lineHeight: "1.6"
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          color: "#C97A6C",
-          fontWeight: "bold",
-          fontSize: "16px",
-          marginBottom: "12px"
-        }
-      }, "Something broke — here's the error so it can be fixed:"), /*#__PURE__*/React.createElement("div", {
-        style: {
-          marginBottom: "16px"
-        }
-      }, String(this.state.error && this.state.error.stack || this.state.error)), /*#__PURE__*/React.createElement("button", {
-        onClick: () => window.location.reload(),
-        style: {
-          background: "#B98E4A",
-          color: "#10202E",
-          border: "none",
-          borderRadius: "6px",
-          padding: "10px 16px",
-          fontWeight: 600,
-          fontFamily: "sans-serif",
-          cursor: "pointer"
-        }
-      }, "Reload"));
-    }
-    return this.props.children;
-  }
-}
-ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(ErrorBoundary, null, /*#__PURE__*/React.createElement(AuthGate, null)));
+ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(AuthGate, null));
 </script>
 </body>
 </html>
