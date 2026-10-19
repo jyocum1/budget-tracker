@@ -420,13 +420,14 @@ onAuthStateChanged(auth, user => {
 });
 
 let saveTimer = null;
-window.firestoreSave = function (categories, transactions, onboardingComplete) {
+window.firestoreSave = function (categories, transactions, onboardingComplete, trips) {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     authReady.then(() => {
       setDoc(dataDocRef, {
         categories,
         transactions,
+        trips: Array.isArray(trips) ? trips : [],
         onboardingComplete: !!onboardingComplete,
         updatedAt: Date.now()
       }).catch(err => console.error("Firestore save failed:", err));
@@ -810,7 +811,19 @@ const DEFAULT_CATEGORIES = [{
   target: 2.34,
   fixed: true,
   essential: true
+}, {
+  id: "business-travel",
+  name: "Business Travel",
+  target: 0,
+  fixed: false,
+  essential: false
 }];
+function withDefaultCats(cats) {
+  if (!Array.isArray(cats)) return cats;
+  const have = new Set(cats.map(c => c.id));
+  const add = DEFAULT_CATEGORIES.filter(c => !have.has(c.id)).map(c => ({ ...c, target: 0 }));
+  return add.length ? [...cats, ...add] : cats;
+}
 const DEFAULT_TRANSACTIONS = [];
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 function todayISO() {
@@ -1205,8 +1218,10 @@ function CategoryDonut({
 
 /* ---------- main app ---------- */
 function BudgetTracker() {
-  const [categories, setCategories] = useState(() => loadJSON(STORAGE_KEY_CATS, DEFAULT_CATEGORIES));
+  const [categories, setCategories] = useState(() => withDefaultCats(loadJSON(STORAGE_KEY_CATS, DEFAULT_CATEGORIES)));
   const [transactions, setTransactions] = useState(() => loadJSON(STORAGE_KEY_TXNS, DEFAULT_TRANSACTIONS));
+  const [trips, setTrips] = useState(() => loadJSON("budget-tracker-trips-v1", []));
+  const [fReimb, setFReimb] = useState(false);
   const [onboardingComplete, setOnboardingComplete] = useState(() => {
     const stored = loadJSON(STORAGE_KEY_ONBOARDED, null);
     if (stored !== null) return stored;
@@ -1244,6 +1259,9 @@ function BudgetTracker() {
     saveJSON(STORAGE_KEY_TXNS, transactions);
   }, [transactions]);
   useEffect(() => {
+    saveJSON("budget-tracker-trips-v1", trips);
+  }, [trips]);
+  useEffect(() => {
     saveJSON(STORAGE_KEY_CATS, categories);
   }, [categories]);
   useEffect(() => {
@@ -1256,23 +1274,24 @@ function BudgetTracker() {
       return;
     }
     if (window.firestoreSave) {
-      window.firestoreSave(categories, transactions, onboardingComplete);
+      window.firestoreSave(categories, transactions, onboardingComplete, trips);
       setSyncStatus("synced");
     }
-  }, [categories, transactions, onboardingComplete]);
+  }, [categories, transactions, onboardingComplete, trips]);
   useEffect(() => {
     function handleData(e) {
       const detail = e.detail || {};
       skipNextRemoteSaveRef.current = true;
-      if (detail.categories) setCategories(detail.categories);
+      if (detail.categories) setCategories(withDefaultCats(detail.categories));
       if (detail.transactions) setTransactions(detail.transactions);
+      if (Array.isArray(detail.trips)) setTrips(detail.trips);
       if (typeof detail.onboardingComplete === "boolean") setOnboardingComplete(detail.onboardingComplete);
       firstSyncDoneRef.current = true;
       setSyncStatus("synced");
     }
     function handleEmpty() {
       firstSyncDoneRef.current = true;
-      if (window.firestoreSave) window.firestoreSave(categories, transactions, onboardingComplete);
+      if (window.firestoreSave) window.firestoreSave(categories, transactions, onboardingComplete, trips);
       setSyncStatus("synced");
     }
     function handleError() {
@@ -1348,7 +1367,7 @@ function BudgetTracker() {
         ...t,
         date: fDate,
         categoryId: fCategory,
-        amount: Math.round(amt * 100) / 100,
+        amount: (fReimb ? -1 : 1) * Math.round(amt * 100) / 100,
         note: fNote.trim()
       } : t));
       showToast("Updated " + fmtMoney(amt, 2));
@@ -1357,7 +1376,7 @@ function BudgetTracker() {
         id: "t-" + Date.now(),
         date: fDate,
         categoryId: fCategory,
-        amount: Math.round(amt * 100) / 100,
+        amount: (fReimb ? -1 : 1) * Math.round(amt * 100) / 100,
         note: fNote.trim()
       };
       setTransactions([t, ...transactions]);
@@ -1367,7 +1386,8 @@ function BudgetTracker() {
   }
   function startEdit(t) {
     setEditingId(t.id);
-    setFAmount(String(t.amount));
+    setFAmount(String(Math.abs(t.amount)));
+    setFReimb(t.amount < 0);
     setFCategory(t.categoryId);
     setFDate(t.date);
     setFNote(t.note || "");
@@ -1376,6 +1396,7 @@ function BudgetTracker() {
   function openAddForm() {
     setEditingId(null);
     setFAmount("");
+    setFReimb(false);
     setFCategory("groceries");
     setFDate(todayISO());
     setFNote("");
@@ -1385,6 +1406,7 @@ function BudgetTracker() {
     setFormOpen(false);
     setEditingId(null);
     setFAmount("");
+    setFReimb(false);
     setFNote("");
   }
   function deleteTransaction(id) {
@@ -1401,6 +1423,7 @@ function BudgetTracker() {
     const payload = {
       categories,
       transactions,
+      trips,
       exportedAt: new Date().toISOString()
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
@@ -1439,8 +1462,15 @@ function BudgetTracker() {
         });
         const merged = Object.values(byId).sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
         setTransactions(merged);
+        if (Array.isArray(parsed.trips) && parsed.trips.length > 0) {
+          const tById = {};
+          [...trips, ...parsed.trips].forEach(t => {
+            tById[t.id] = t;
+          });
+          setTrips(Object.values(tById));
+        }
         if (Array.isArray(parsed.categories) && parsed.categories.length > 0) {
-          setCategories(parsed.categories);
+          setCategories(withDefaultCats(parsed.categories));
         }
         showToast(`Imported — ${added} new transaction${added === 1 ? "" : "s"} merged in`);
       } catch (err) {
@@ -1752,6 +1782,10 @@ function BudgetTracker() {
     isCurrentMonth: isCurrentMonth,
     deleteTransaction: deleteTransaction,
     startEdit: startEdit
+  }), tab === "today" && /*#__PURE__*/React.createElement(BusinessTravelCard, {
+    transactions: transactions,
+    trips: trips,
+    setTrips: setTrips
   }), tab === "log" && /*#__PURE__*/React.createElement(LogView, {
     transactions: transactions,
     catById: catById,
@@ -1795,6 +1829,8 @@ function BudgetTracker() {
     setDate: setFDate,
     note: fNote,
     setNote: setFNote,
+    reimb: fReimb,
+    setReimb: setFReimb,
     categories: categories
   }), toast && /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1816,6 +1852,119 @@ function BudgetTracker() {
     size: 15,
     color: COLORS.teal
   }), " ", toast));
+}
+
+/* ---------- business travel: reimbursements and per diem tracking ---------- */
+const BT_ID = "business-travel";
+function tripDays(t) {
+  const a = new Date(t.start + "T00:00:00"),
+    b = new Date(t.end + "T00:00:00");
+  const n = Math.round((b - a) / 86400000) + 1;
+  return n > 0 ? n : 0;
+}
+// M&IE only (lodging is not budgeted). The first and last travel days are paid at 75%.
+function tripAllowed(t) {
+  const d = tripDays(t);
+  if (d <= 0) return 0;
+  if (d === 1) return t.dailyRate * 0.75;
+  return t.dailyRate * (d - 2) + 2 * t.dailyRate * 0.75;
+}
+function BusinessTravelCard({
+  transactions,
+  trips,
+  setTrips
+}) {
+  const h = React.createElement;
+  const [adding, setAdding] = useState(false);
+  const [nm, setNm] = useState("");
+  const [st, setSt] = useState(todayISO());
+  const [en, setEn] = useState(todayISO());
+  const [rate, setRate] = useState("");
+  const bt = transactions.filter(t => t.categoryId === BT_ID);
+  const spent = bt.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
+  const reimbursed = bt.filter(t => t.amount < 0).reduce((s, t) => s - t.amount, 0);
+  const net = spent - reimbursed;
+  const inp = {
+    background: COLORS.ink,
+    color: COLORS.paper,
+    border: `1px solid ${COLORS.line}`,
+    borderRadius: "6px",
+    padding: "7px 9px",
+    fontSize: "13px"
+  };
+  function addTrip(e) {
+    e.preventDefault();
+    const r = parseFloat(rate);
+    if (!nm.trim() || !r || r <= 0 || !st || !en || en < st) return;
+    setTrips([...trips, {
+      id: "trip-" + Date.now(),
+      name: nm.trim(),
+      start: st,
+      end: en,
+      dailyRate: Math.round(r * 100) / 100
+    }]);
+    setNm("");
+    setRate("");
+    setAdding(false);
+  }
+  const stat = (label, value, color) => h("div", {
+    style: { flex: "1 1 120px" }
+  }, h("div", {
+    style: { color: COLORS.paperDim, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.5px" }
+  }, label), h("div", {
+    style: { color: color || COLORS.paper, fontFamily: FONT_MONO, fontSize: "18px", marginTop: "2px" }
+  }, value));
+  return h("div", {
+    style: {
+      background: COLORS.panel,
+      border: `1px solid ${COLORS.line}`,
+      borderRadius: "10px",
+      padding: "16px 18px",
+      marginTop: "24px"
+    }
+  }, h("div", {
+    style: { color: COLORS.paper, fontFamily: FONT_DISPLAY, fontSize: "15px", fontWeight: 600, marginBottom: "12px" }
+  }, "Business travel"), h("div", {
+    style: { display: "flex", gap: "14px", flexWrap: "wrap", marginBottom: "14px" }
+  }, stat("Spent", fmtMoney(spent, 2)), stat("Reimbursed", fmtMoney(reimbursed, 2), COLORS.teal), stat(net > 0 ? "Still owed to you" : net < 0 ? "Reimbursed over spend" : "Settled up", fmtMoney(Math.abs(net), 2), net > 0 ? COLORS.brass : COLORS.teal)), h("div", {
+    style: { color: COLORS.paperDim, fontSize: "11.5px", marginBottom: "12px" }
+  }, "Log spending in the Business Travel category, and log FEMA payments there too with “This is a reimbursement” checked. Reimbursements net against spending in your monthly totals."), trips.length === 0 && !adding && h("div", {
+    style: { color: COLORS.paperDim, fontSize: "12.5px", marginBottom: "10px" }
+  }, "No trips yet. Add a trip with its daily M&IE rate to see whether you're over."), trips.map(t => {
+    const days = tripDays(t);
+    const allowed = tripAllowed(t);
+    const tripSpend = bt.filter(x => x.amount > 0 && x.date >= t.start && x.date <= t.end).reduce((s, x) => s + x.amount, 0);
+    const over = tripSpend > allowed + 0.005;
+    const frac = allowed > 0 ? Math.min(tripSpend / allowed, 1) : 0;
+    return h("div", {
+      key: t.id,
+      style: { borderTop: `1px solid ${COLORS.line}`, padding: "10px 0" }
+    }, h("div", {
+      style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "8px", flexWrap: "wrap" }
+    }, h("span", { style: { color: COLORS.paper, fontSize: "13.5px", fontWeight: 600 } }, t.name), h("span", { style: { color: COLORS.paperDim, fontSize: "12px" } }, t.start, " to ", t.end, " · ", days, " day", days === 1 ? "" : "s", " · ", fmtMoney(t.dailyRate, 2), "/day M&IE"), h("button", {
+      onClick: () => setTrips(trips.filter(x => x.id !== t.id)),
+      style: { background: "none", border: "none", color: COLORS.paperDim, fontSize: "12px", textDecoration: "underline" }
+    }, "Remove")), h("div", {
+      style: { height: "8px", background: COLORS.ink, borderRadius: "4px", margin: "8px 0 6px", overflow: "hidden" }
+    }, h("div", {
+      style: { width: Math.round(frac * 100) + "%", height: "100%", background: over ? COLORS.coral : COLORS.teal }
+    })), h("div", {
+      style: { color: over ? COLORS.coral : COLORS.paper, fontSize: "12.5px", fontFamily: FONT_MONO }
+    }, fmtMoney(tripSpend, 2), " spent of ", fmtMoney(allowed, 2), " M&IE allowance (first/last day at 75%) — ", over ? fmtMoney(tripSpend - allowed, 2) + " OVER" : fmtMoney(allowed - tripSpend, 2) + " under"));
+  }), adding ? h("form", {
+    onSubmit: addTrip,
+    style: { borderTop: `1px solid ${COLORS.line}`, paddingTop: "12px", display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "flex-end" }
+  }, h("input", { value: nm, onChange: e => setNm(e.target.value), placeholder: "Trip name", style: { ...inp, flex: "1 1 140px" } }), h("input", { type: "date", value: st, onChange: e => setSt(e.target.value), style: inp }), h("input", { type: "date", value: en, onChange: e => setEn(e.target.value), style: inp }), h("input", { type: "number", step: "0.01", min: "0", value: rate, onChange: e => setRate(e.target.value), placeholder: "M&IE / day", style: { ...inp, width: "120px" } }), h("button", {
+    type: "submit",
+    style: { background: COLORS.brass, color: COLORS.ink, border: "none", borderRadius: "6px", padding: "8px 14px", fontWeight: 600, fontSize: "13px" }
+  }, "Save trip"), h("button", {
+    type: "button",
+    onClick: () => setAdding(false),
+    style: { background: "none", border: "none", color: COLORS.paperDim, fontSize: "13px" }
+  }, "Cancel")) : h("button", {
+    onClick: () => setAdding(true),
+    style: { background: COLORS.brass, color: COLORS.ink, border: "none", borderRadius: "6px", padding: "8px 14px", fontWeight: 600, fontSize: "13px" }
+  }, "+ Add a trip"));
 }
 function TodayView({
   year,
@@ -2780,6 +2929,8 @@ function QuickAddModal({
   setDate,
   note,
   setNote,
+  reimb,
+  setReimb,
   categories
 }) {
   const selectable = categories;
@@ -2869,7 +3020,20 @@ function QuickAddModal({
   }, selectable.map(c => /*#__PURE__*/React.createElement("option", {
     key: c.id,
     value: c.id
-  }, c.name)))), /*#__PURE__*/React.createElement(Field, {
+  }, c.name)))), (category === "business-travel" || reimb) && /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      color: COLORS.paper,
+      fontSize: "13px",
+      marginBottom: "12px"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: !!reimb,
+    onChange: e => setReimb(e.target.checked)
+  }), "This is a reimbursement (money coming back)"), /*#__PURE__*/React.createElement(Field, {
     label: "Date"
   }, /*#__PURE__*/React.createElement("input", {
     type: "date",
